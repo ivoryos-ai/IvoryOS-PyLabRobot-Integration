@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plr-ivoryos"
+version = "0.1.0"
+description = "IvoryOS-compatible wrappers for PyLabRobot devices"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "IvoryOS Contributors"}
+]
+keywords = ["lab-automation", "ivoryos", "pylabrobot", "liquid-handler"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "pylabrobot>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.urls]
+Homepage = "https://github.com/heingroup/ivoryos"
