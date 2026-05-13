@@ -159,6 +159,9 @@ class SimulatedGenericBackend:
         if item.startswith("_"): raise AttributeError(item)
         async def _mock_call(*args, **kwargs):
             _log.info("[%s] %s(%s, %s)", self._name, item, args, kwargs)
+            if "read" in item.lower() or "get" in item.lower():
+                return [[0.1] * 12] * 8 # Dummy 96-well plate data (8x12)
+            return None
         return _mock_call
 
 
@@ -521,7 +524,7 @@ class Thermocycler:
 
     def set_temperature(self, temperature: float = 37.0):
         """Set the block temperature in °C."""
-        run_async(self._tc.set_temperature(temperature))
+        run_async(self._tc.set_block_temperature(temperature))
 
     def shutdown(self):
         """Disconnect from the thermocycler."""
