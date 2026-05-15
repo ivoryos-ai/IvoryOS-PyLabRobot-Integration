@@ -160,7 +160,8 @@ class SimulatedGenericBackend:
         async def _mock_call(*args, **kwargs):
             _log.info("[%s] %s(%s, %s)", self._name, item, args, kwargs)
             if "read" in item.lower() or "get" in item.lower():
-                return [[0.1] * 12] * 8 # Dummy 96-well plate data (8x12)
+                # Dummy 96-well plate data as a dict (expected by some PLR versions)
+                return {f"{r}{c}": 0.1 for r in "ABCDEFGH" for c in range(1, 13)}
             return None
         return _mock_call
 
