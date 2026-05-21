@@ -46,7 +46,7 @@ You can pass any standard PyLabRobot backend to the wrappers. This is how you co
 
 ```python
 from plr_ivoryos import Scale
-from pylabrobot.scales.mettler_toledo import MettlerToledoWXS205SDU
+from pylabrobot.scales.mettler_toledo_backend import MettlerToledoWXS205SDU
 
 # Connect to a real Mettler Toledo balance
 scale = Scale(backend=MettlerToledoWXS205SDU(port="COM3"))
@@ -57,10 +57,10 @@ To use PyLabRobot's 3D browser-based simulator, simply pass the `SimulatorBacken
 
 ```python
 from plr_ivoryos import LiquidHandler
-from pylabrobot.liquid_handling.backends import SimulatorBackend
+from pylabrobot.liquid_handling.backends import ChatterBoxBackend
 
 lh = LiquidHandler(
-    backend=SimulatorBackend(open_browser=True),
+    backend=ChatterBoxBackend(open_browser=True),
     deck_json="my_layout.json"
 )
 ```

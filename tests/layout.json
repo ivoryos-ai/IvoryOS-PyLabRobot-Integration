@@ -1,0 +1,15 @@
+{
+  "deck_type": "STARLetDeck",
+  "resources": [
+    {
+      "name": "source_plate",
+      "type": "Cor_96_wellplate_360ul_Fb",
+      "location": {"x": 100, "y": 0, "z": 0}
+    },
+    {
+      "name": "htf_tips",
+      "type": "hamilton_96_tiprack_1000uL_filter",
+      "location": {"x": 100, "y": 200, "z": 0}
+    }
+  ]
+}

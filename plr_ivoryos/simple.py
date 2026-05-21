@@ -159,9 +159,21 @@ class SimulatedGenericBackend:
         if item.startswith("_"): raise AttributeError(item)
         async def _mock_call(*args, **kwargs):
             _log.info("[%s] %s(%s, %s)", self._name, item, args, kwargs)
-            if "read" in item.lower() or "get" in item.lower():
-                # Dummy 96-well plate data as a dict (expected by some PLR versions)
-                return {f"{r}{c}": 0.1 for r in "ABCDEFGH" for c in range(1, 13)}
+            if item.lower().startswith("read_"):
+                data = [[0.1 for _ in range(12)] for _ in range(8)]
+                measurement = {
+                    "time": 0.0,
+                    "temperature": 25.0,
+                    "data": data,
+                }
+                if item == "read_absorbance":
+                    measurement["wavelength"] = kwargs.get("wavelength")
+                elif item == "read_fluorescence":
+                    measurement["ex_wavelength"] = kwargs.get("excitation_wavelength")
+                    measurement["em_wavelength"] = kwargs.get("emission_wavelength")
+                return [measurement]
+            if "get" in item.lower():
+                return 0.0
             return None
         return _mock_call
 
@@ -394,9 +406,9 @@ class PlateReader:
         )
         run_async(self._pr.setup())
 
-    def read_luminescence(self) -> list:
+    def read_luminescence(self, focal_height: float = 10.0) -> list:
         """Read a luminescence plate measurement."""
-        return run_async(self._pr.read_luminescence())
+        return run_async(self._pr.read_luminescence(focal_height=focal_height))
 
     def read_absorbance(self, wavelength: float = 450.0) -> list:
         """Read absorbance at *wavelength* nm."""
@@ -404,11 +416,13 @@ class PlateReader:
 
     def read_fluorescence(self,
                           excitation_wavelength: float = 485.0,
-                          emission_wavelength: float = 535.0) -> list:
+                          emission_wavelength: float = 535.0,
+                          focal_height: float = 10.0) -> list:
         """Read fluorescence intensity."""
         return run_async(self._pr.read_fluorescence(
             excitation_wavelength=excitation_wavelength,
             emission_wavelength=emission_wavelength,
+            focal_height=focal_height,
         ))
 
     def shutdown(self):
@@ -442,7 +456,7 @@ class Fan:
         self._fan = _Fan(backend=backend)
         run_async(self._fan.setup())
 
-    def turn_on(self, intensity: float = 100.0, duration: float = 60.0):
+    def turn_on(self, intensity: float = 100.0, duration: float = None):
         """Turn the fan on at *intensity* % for *duration* seconds."""
         run_async(self._fan.turn_on(intensity=intensity, duration=duration))
 
