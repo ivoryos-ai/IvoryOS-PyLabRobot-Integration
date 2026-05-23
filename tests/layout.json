@@ -2,14 +2,28 @@
   "deck_type": "STARLetDeck",
   "resources": [
     {
-      "name": "source_plate",
-      "type": "Cor_96_wellplate_360ul_Fb",
-      "location": {"x": 100, "y": 0, "z": 0}
+      "name": "tip_carrier",
+      "type": "TIP_CAR_96BC_5mlT_A00",
+      "location": {"x": 135, "y": 63, "z": 0},
+      "children": [
+        {
+          "name": "teaching_tip_rack",
+          "type": "hamilton_96_tiprack_1000uL_filter",
+          "site": 0
+        }
+      ]
     },
     {
-      "name": "htf_tips",
-      "type": "hamilton_96_tiprack_1000uL_filter",
-      "location": {"x": 100, "y": 200, "z": 0}
+      "name": "plate_carrier",
+      "type": "PLT_CAR_L5AC_A00",
+      "location": {"x": 270, "y": 63, "z": 0},
+      "children": [
+        {
+          "name": "source_plate",
+          "type": "Cor_96_wellplate_360ul_Fb",
+          "site": 1
+        }
+      ]
     }
   ]
 }

@@ -47,8 +47,8 @@ def check(label, fn, expect_error=False):
 print("\n--- Liquid Handler (Chatterbox) ---")
 lh = LiquidHandler(simulated=True, deck_json=LAYOUT)
 
-check("pick_up_tips(htf_tips, A1)",
-      lambda: lh.pick_up_tips(tip_rack_name="htf_tips", position="A1"))
+check("pick_up_tips(teaching_tip_rack, A1)",
+      lambda: lh.pick_up_tips(tip_rack_name="teaching_tip_rack", position="A1"))
 check("aspirate(source_plate, B2, 50 uL)",
       lambda: lh.aspirate(plate_name="source_plate", well="B2", volume_ul=50))
 check("dispense(source_plate, C3, 50 uL)",

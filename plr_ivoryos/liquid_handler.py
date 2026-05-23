@@ -119,13 +119,34 @@ def _load_deck_from_json(json_path: str) -> "Deck":
     deck_class = _resolve_plr_class(config.get("deck_type", "STARLetDeck"))
     deck = deck_class()
 
+    def build_resource(resource_config: dict):
+        res_class = _resolve_plr_class(resource_config["type"])
+        resource = res_class(name=resource_config["name"])
+
+        for child_config in resource_config.get("children", []):
+            child = build_resource(child_config)
+            site = child_config.get("site")
+            if site is not None and hasattr(resource, "assign_resource_to_site"):
+                resource.assign_resource_to_site(child, spot=site)
+            else:
+                child_loc = child_config.get("location", {})
+                resource.assign_child_resource(
+                    child,
+                    location=Coordinate(
+                        child_loc.get("x", 0),
+                        child_loc.get("y", 0),
+                        child_loc.get("z", 0),
+                    ),
+                )
+
+        return resource
+
     for r in config.get("resources", []):
-        res_class = _resolve_plr_class(r["type"])
         loc = r.get("location", {})
         coord = Coordinate(
             loc.get("x", 0), loc.get("y", 0), loc.get("z", 0)
         )
-        deck.assign_child_resource(res_class(name=r["name"]), location=coord)
+        deck.assign_child_resource(build_resource(r), location=coord)
 
     return deck
 
@@ -339,6 +360,41 @@ def _build_proxy_class(
         """Return a text summary of the current deck layout."""
         return lh.deck.summary()
 
+    def start_visualizer(
+        self,
+        host: str = "127.0.0.1",
+        ws_port: int = 2121,
+        fs_port: int = 1337,
+        open_browser: bool = True,
+        name: str = None,
+        favicon: str = None,
+        liquid_color: str = "F39C12",
+    ) -> str:
+        """Start PyLabRobot's browser visualizer for the current deck."""
+        from pylabrobot.resources.tip_tracker import set_tip_tracking
+        from pylabrobot.resources.volume_tracker import set_volume_tracking
+        from pylabrobot.visualizer import Visualizer
+
+        # set_tip_tracking(True)
+        # set_volume_tracking(True)
+
+        if favicon == "":
+            favicon = None
+
+        visualizer = Visualizer(
+            lh.deck,
+            host=host,
+            ws_port=ws_port,
+            fs_port=fs_port,
+            open_browser=open_browser,
+            name=name,
+            favicon=favicon,
+            liquid_color=liquid_color,
+        )
+        run_async(visualizer.setup())
+        self._visualizer = visualizer
+        return f"http://{visualizer.host}:{visualizer.fs_port}"
+
     # Build the class dynamically — each instance gets its own class so
     # the annotations embed *this* deck's Enum classes, not a shared global.
     ProxyClass = type(
@@ -354,6 +410,7 @@ def _build_proxy_class(
             "transfer": transfer,
             "mix": mix,
             "summary": summary,
+            "start_visualizer": start_visualizer,
         },
     )
     return ProxyClass
@@ -406,13 +463,14 @@ class LiquidHandler:
             backend = backend or LiquidHandlerChatterboxBackend()
             if deck is None and deck_json is None:
                 from pylabrobot.resources.hamilton import STARLetDeck
-                from pylabrobot.resources import corning_96_wellplate_360ul_Fb, HTF_L
+                from pylabrobot.resources.corning.plates import Cor_96_wellplate_360ul_Fb
+                from pylabrobot.resources.hamilton import hamilton_96_tiprack_1000uL_filter
                 from pylabrobot.resources.coordinate import Coordinate
                 deck = STARLetDeck()
-                deck.assign_child_resource(corning_96_wellplate_360ul_Fb(name="sim_plate"),
+                deck.assign_child_resource(Cor_96_wellplate_360ul_Fb(name="sim_plate"),
                                             location=Coordinate(100, 100, 0))
-                deck.assign_child_resource(HTF_L(name="sim_tips"),
-                                            location=Coordinate(200, 100, 0))
+                deck.assign_child_resource(hamilton_96_tiprack_1000uL_filter(name="sim_tips"),
+                                            location=Coordinate(300, 100, 0))
 
         if deck is None and deck_json is not None:
             deck = _load_deck_from_json(deck_json)
@@ -443,6 +501,8 @@ class LiquidHandler:
 
         # Instantiate the proxy — this is what IvoryOS will introspect
         instance = object.__new__(ProxyClass)
+        instance._lh = _lh
+        instance._resource_map = resource_map
         return instance
 
     def __init__(self, backend, deck=None, deck_json=None, **kwargs):

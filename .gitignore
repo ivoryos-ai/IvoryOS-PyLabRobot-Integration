@@ -216,6 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-/ivoryos_data/
+
+# AI
 /scratch/
-.idea/misc.xml
+
+# IvoryOS
+/ivoryos_data/
+/examples/ivoryos_data/

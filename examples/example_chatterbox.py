@@ -17,15 +17,19 @@ IvoryOS will start at http://localhost:8000/ivoryos
 
 import sys
 import os
+
+from pylabrobot.liquid_handling import LiquidHandlerChatterboxBackend
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from plr_ivoryos import LiquidHandler
 
 lh = LiquidHandler(
-    simulated=True,
+    backend=LiquidHandlerChatterboxBackend(),
     deck_json=os.path.join(os.path.dirname(__file__), "layout.json"),
 )
 
+lh.start_visualizer(open_browser=False)
 
 if __name__ == "__main__":
     import ivoryos
