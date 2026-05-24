@@ -263,42 +263,52 @@ def _build_proxy_class(
     def aspirate(
         self,
         plate_name: Union[PlateResource, str] = None,
-        well: Union[WellPosition, str] = None,
-        volume_ul: float = 100.0,
+        resources: Union[WellPosition, str] = None,
+        vols: float = 100.0,
+        flow_rates: float = None,
+        **kwargs,
     ):
         """Aspirate liquid from a plate well.
         Requires a tip to be loaded first (call pick_up_tips)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(well), "plate")
-        run_async(lh.aspirate(resource, vols=[volume_ul]))
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        if flow_rates is not None:
+            kwargs["flow_rates"] = [flow_rates]
+        run_async(lh.aspirate(resource, vols=[vols], **kwargs))
 
     def dispense(
         self,
         plate_name: Union[PlateResource, str] = None,
-        well: Union[WellPosition, str] = None,
-        volume_ul: float = 100.0,
+        resources: Union[WellPosition, str] = None,
+        vols: float = 100.0,
+        flow_rates: float = None,
+        **kwargs,
     ):
         """Dispense liquid into a plate well.
         Requires a tip to be loaded first (call pick_up_tips)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(well), "plate")
-        run_async(lh.dispense(resource, vols=[volume_ul]))
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        if flow_rates is not None:
+            kwargs["flow_rates"] = [flow_rates]
+        run_async(lh.dispense(resource, vols=[vols], **kwargs))
 
     def pick_up_tips(
         self,
         tip_rack_name: Union[TipRackResource, str] = None,
-        position: Union[WellPosition, str] = None,
+        tip_spots: Union[WellPosition, str] = None,
+        **kwargs,
     ):
         """Pick up a tip from a tip rack. Call before aspirate/dispense."""
-        tip_spot = _get_resource(_resolve_name(tip_rack_name), _resolve_name(position), "rack")
-        run_async(lh.pick_up_tips(tip_spot))
+        tip_spot = _get_resource(_resolve_name(tip_rack_name), _resolve_name(tip_spots), "rack")
+        run_async(lh.pick_up_tips(tip_spot, **kwargs))
 
     def drop_tips(
         self,
         tip_rack_name: Union[TipRackResource, str] = None,
-        position: Union[WellPosition, str] = None,
+        tip_spots: Union[WellPosition, str] = None,
+        **kwargs,
     ):
         """Drop tips back to a specific tip rack position."""
-        tip_spot = _get_resource(_resolve_name(tip_rack_name), _resolve_name(position), "rack")
-        run_async(lh.drop_tips(tip_spot))
+        tip_spot = _get_resource(_resolve_name(tip_rack_name), _resolve_name(tip_spots), "rack")
+        run_async(lh.drop_tips(tip_spot, **kwargs))
 
     def return_tips(self):
         """Return all currently held tips to their original positions."""
@@ -316,7 +326,10 @@ def _build_proxy_class(
         dest_well: Union[WellPosition, str] = None,
         tip_rack_name: Union[TipRackResource, str] = None,
         tip_position: Union[WellPosition, str] = None,
-        volume_ul: float = 100.0,
+        source_vol: float = 100.0,
+        aspiration_flow_rate: float = None,
+        dispense_flow_rates: float = None,
+        **kwargs,
     ):
         """
         High-level transfer: pick up tip → aspirate → dispense → return tip.
@@ -330,9 +343,21 @@ def _build_proxy_class(
         tip_pos   = _resolve_name(tip_position)
 
         async def _transfer():
-            await lh.pick_up_tips(resource_map[rack][tip_pos])
-            await lh.aspirate(resource_map[src_plate][src_well], vols=[volume_ul])
-            await lh.dispense(resource_map[dst_plate][dst_well], vols=[volume_ul])
+            tip = _get_resource(rack, tip_pos, "rack")
+            await lh.pick_up_tips(tip) # tip pickup doesn't get the transfer kwargs, they are mostly for aspirate/dispense
+            
+            src = _get_resource(src_plate, src_well, "plate")
+            asp_kwargs = kwargs.copy()
+            if aspiration_flow_rate is not None:
+                asp_kwargs["flow_rates"] = [aspiration_flow_rate]
+            await lh.aspirate(src, vols=[source_vol], **asp_kwargs)
+            
+            dst = _get_resource(dst_plate, dst_well, "plate")
+            disp_kwargs = kwargs.copy()
+            if dispense_flow_rates is not None:
+                disp_kwargs["flow_rates"] = [dispense_flow_rates]
+            await lh.dispense(dst, vols=[source_vol], **disp_kwargs)
+            
             await lh.return_tips()
 
         run_async(_transfer())
@@ -340,19 +365,25 @@ def _build_proxy_class(
     def mix(
         self,
         plate_name: Union[PlateResource, str] = None,
-        well: Union[WellPosition, str] = None,
-        volume_ul: float = 50.0,
+        resources: Union[WellPosition, str] = None,
+        vols: float = 50.0,
         repetitions: int = 3,
+        flow_rates: float = None,
+        **kwargs,
     ):
         """Mix liquid in a well by repeatedly aspirating and dispensing."""
         plate    = _resolve_name(plate_name)
-        pos      = _resolve_name(well)
-        resource = resource_map[plate][pos]
+        pos      = _resolve_name(resources)
 
         async def _mix():
+            resource = _get_resource(plate, pos, "plate")
+            mix_kwargs = kwargs.copy()
+            if flow_rates is not None:
+                mix_kwargs["flow_rates"] = [flow_rates]
+                
             for _ in range(repetitions):
-                await lh.aspirate(resource, vols=[volume_ul])
-                await lh.dispense(resource, vols=[volume_ul])
+                await lh.aspirate(resource, vols=[vols], **mix_kwargs)
+                await lh.dispense(resource, vols=[vols], **mix_kwargs)
 
         run_async(_mix())
 
