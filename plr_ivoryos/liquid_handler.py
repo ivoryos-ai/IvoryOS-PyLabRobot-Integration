@@ -216,6 +216,7 @@ def _build_proxy_class(
     PlateResource,
     TipRackResource,
     WellPosition,
+    pro_mode: bool = False,
 ) -> type:
     """
     Construct a new class (unique per LiquidHandler instance) whose method
@@ -247,11 +248,19 @@ def _build_proxy_class(
     def _get_resource(container_name: str, position: str, container_type: str):
         """Resolve resource_map[name][pos] with a clear error on bad inputs."""
         known = _plate_names if container_type == "plate" else _rack_names
+        
+        if not container_name or container_name == "None":
+            raise ValueError(f"Please select a {container_type}.")
+            
         if container_name not in resource_map:
             raise ValueError(
                 f"Unknown {container_type} '{container_name}'. "
                 f"Available: {known}"
             )
+            
+        if not position or position == "None":
+            raise ValueError(f"Please select a valid well/position on '{container_name}'.")
+            
         try:
             return resource_map[container_name][position]
         except Exception:
@@ -262,8 +271,8 @@ def _build_proxy_class(
 
     def aspirate(
         self,
-        plate_name: Union[PlateResource, str] = None,
-        resources: Union[WellPosition, str] = None,
+        plate_name: Union[PlateResource, str],
+        resources: Union[WellPosition, str],
         vols: float = 100.0,
         flow_rates: float = None,
         **kwargs,
@@ -277,8 +286,8 @@ def _build_proxy_class(
 
     def dispense(
         self,
-        plate_name: Union[PlateResource, str] = None,
-        resources: Union[WellPosition, str] = None,
+        plate_name: Union[PlateResource, str],
+        resources: Union[WellPosition, str],
         vols: float = 100.0,
         flow_rates: float = None,
         **kwargs,
@@ -292,8 +301,8 @@ def _build_proxy_class(
 
     def pick_up_tips(
         self,
-        tip_rack_name: Union[TipRackResource, str] = None,
-        tip_spots: Union[WellPosition, str] = None,
+        tip_rack_name: Union[TipRackResource, str],
+        tip_spots: Union[WellPosition, str],
         **kwargs,
     ):
         """Pick up a tip from a tip rack. Call before aspirate/dispense."""
@@ -302,8 +311,8 @@ def _build_proxy_class(
 
     def drop_tips(
         self,
-        tip_rack_name: Union[TipRackResource, str] = None,
-        tip_spots: Union[WellPosition, str] = None,
+        tip_rack_name: Union[TipRackResource, str],
+        tip_spots: Union[WellPosition, str],
         **kwargs,
     ):
         """Drop tips back to a specific tip rack position."""
@@ -320,12 +329,12 @@ def _build_proxy_class(
 
     def transfer(
         self,
-        source_plate: Union[PlateResource, str] = None,
-        source_well: Union[WellPosition, str] = None,
-        dest_plate: Union[PlateResource, str] = None,
-        dest_well: Union[WellPosition, str] = None,
-        tip_rack_name: Union[TipRackResource, str] = None,
-        tip_position: Union[WellPosition, str] = None,
+        source_plate: Union[PlateResource, str],
+        source_well: Union[WellPosition, str],
+        dest_plate: Union[PlateResource, str],
+        dest_well: Union[WellPosition, str],
+        tip_rack_name: Union[TipRackResource, str],
+        tip_position: Union[WellPosition, str],
         source_vol: float = 100.0,
         aspiration_flow_rate: float = None,
         dispense_flow_rates: float = None,
@@ -362,10 +371,117 @@ def _build_proxy_class(
 
         run_async(_transfer())
 
+    def aspirate_pro(
+        self,
+        plate_name: Union[PlateResource, str],
+        resources: Union[WellPosition, str],
+        vols: float = 100.0,
+        flow_rates: float = None,
+        mix_volume: float = None,
+        mix_repetitions: int = None,
+        mix_flow_rate: float = None,
+        blow_out_air_volume: float = None,
+        **kwargs,
+    ):
+        """Aspirate liquid from a plate well (Pro Mode)."""
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        call_kwargs = kwargs.copy()
+        if flow_rates is not None:
+            call_kwargs["flow_rates"] = [flow_rates]
+        if mix_volume is not None and mix_repetitions is not None:
+            from pylabrobot.liquid_handling.standard import Mix as PLRMix
+            fr = mix_flow_rate if mix_flow_rate is not None else (flow_rates if flow_rates is not None else 20.0)
+            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)]
+        if blow_out_air_volume is not None:
+            call_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
+        run_async(lh.aspirate(resource, vols=[vols], **call_kwargs))
+
+    def dispense_pro(
+        self,
+        plate_name: Union[PlateResource, str],
+        resources: Union[WellPosition, str],
+        vols: float = 100.0,
+        flow_rates: float = None,
+        mix_volume: float = None,
+        mix_repetitions: int = None,
+        mix_flow_rate: float = None,
+        blow_out_air_volume: float = None,
+        **kwargs,
+    ):
+        """Dispense liquid into a plate well (Pro Mode)."""
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        call_kwargs = kwargs.copy()
+        if flow_rates is not None:
+            call_kwargs["flow_rates"] = [flow_rates]
+        if mix_volume is not None and mix_repetitions is not None:
+            from pylabrobot.liquid_handling.standard import Mix as PLRMix
+            fr = mix_flow_rate if mix_flow_rate is not None else (flow_rates if flow_rates is not None else 20.0)
+            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)]
+        if blow_out_air_volume is not None:
+            call_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
+        run_async(lh.dispense(resource, vols=[vols], **call_kwargs))
+
+    def transfer_pro(
+        self,
+        source_plate: Union[PlateResource, str],
+        source_well: Union[WellPosition, str],
+        dest_plate: Union[PlateResource, str],
+        dest_well: Union[WellPosition, str],
+        tip_rack_name: Union[TipRackResource, str],
+        tip_position: Union[WellPosition, str],
+        source_vol: float = 100.0,
+        aspiration_flow_rate: float = None,
+        dispense_flow_rates: float = None,
+        mix_before_aspirate_volume: float = None,
+        mix_before_aspirate_repetitions: int = None,
+        mix_after_dispense_volume: float = None,
+        mix_after_dispense_repetitions: int = None,
+        mix_flow_rate: float = None,
+        blow_out_air_volume: float = None,
+        **kwargs,
+    ):
+        """High-level transfer (Pro Mode)."""
+        src_plate = _resolve_name(source_plate)
+        src_well  = _resolve_name(source_well)
+        dst_plate = _resolve_name(dest_plate)
+        dst_well  = _resolve_name(dest_well)
+        rack      = _resolve_name(tip_rack_name)
+        tip_pos   = _resolve_name(tip_position)
+
+        async def _transfer():
+            tip = _get_resource(rack, tip_pos, "rack")
+            await lh.pick_up_tips(tip) 
+            
+            from pylabrobot.liquid_handling.standard import Mix as PLRMix
+
+            src = _get_resource(src_plate, src_well, "plate")
+            asp_kwargs = kwargs.copy()
+            if aspiration_flow_rate is not None:
+                asp_kwargs["flow_rates"] = [aspiration_flow_rate]
+            if mix_before_aspirate_volume is not None and mix_before_aspirate_repetitions is not None:
+                fr = mix_flow_rate if mix_flow_rate is not None else (aspiration_flow_rate if aspiration_flow_rate is not None else 20.0)
+                asp_kwargs["mix"] = [PLRMix(volume=mix_before_aspirate_volume, repetitions=mix_before_aspirate_repetitions, flow_rate=fr)]
+            await lh.aspirate(src, vols=[source_vol], **asp_kwargs)
+            
+            dst = _get_resource(dst_plate, dst_well, "plate")
+            disp_kwargs = kwargs.copy()
+            if dispense_flow_rates is not None:
+                disp_kwargs["flow_rates"] = [dispense_flow_rates]
+            if mix_after_dispense_volume is not None and mix_after_dispense_repetitions is not None:
+                fr = mix_flow_rate if mix_flow_rate is not None else (dispense_flow_rates if dispense_flow_rates is not None else 20.0)
+                disp_kwargs["mix"] = [PLRMix(volume=mix_after_dispense_volume, repetitions=mix_after_dispense_repetitions, flow_rate=fr)]
+            if blow_out_air_volume is not None:
+                disp_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
+            await lh.dispense(dst, vols=[source_vol], **disp_kwargs)
+            
+            await lh.return_tips()
+
+        run_async(_transfer())
+
     def mix(
         self,
-        plate_name: Union[PlateResource, str] = None,
-        resources: Union[WellPosition, str] = None,
+        plate_name: Union[PlateResource, str],
+        resources: Union[WellPosition, str],
         vols: float = 50.0,
         repetitions: int = 3,
         flow_rates: float = None,
@@ -432,13 +548,13 @@ def _build_proxy_class(
         "LiquidHandlerProxy",
         (),
         {
-            "aspirate": aspirate,
-            "dispense": dispense,
+            "aspirate": aspirate_pro if pro_mode else aspirate,
+            "dispense": dispense_pro if pro_mode else dispense,
             "pick_up_tips": pick_up_tips,
             "drop_tips": drop_tips,
             "return_tips": return_tips,
             "discard_tips": discard_tips,
-            "transfer": transfer,
+            "transfer": transfer_pro if pro_mode else transfer,
             "mix": mix,
             "summary": summary,
             "start_visualizer": start_visualizer,
@@ -528,7 +644,8 @@ class LiquidHandler:
         PlateEnum, TipRackEnum, WellEnum = _build_deck_enums(_lh)
 
         # Create a proxy class whose method signatures embed these Enums
-        ProxyClass = _build_proxy_class(_lh, resource_map, PlateEnum, TipRackEnum, WellEnum)
+        pro_mode = (cls.__name__ == "AdvancedLiquidHandler")
+        ProxyClass = _build_proxy_class(_lh, resource_map, PlateEnum, TipRackEnum, WellEnum, pro_mode=pro_mode)
 
         # Instantiate the proxy — this is what IvoryOS will introspect
         instance = object.__new__(ProxyClass)
@@ -540,3 +657,11 @@ class LiquidHandler:
         # __init__ is called on the ProxyClass instance; nothing to do here
         # because __new__ already set everything up.
         pass
+
+class AdvancedLiquidHandler(LiquidHandler):
+    """
+    Advanced IvoryOS-compatible liquid handler.
+    Provides all standard LiquidHandler functionality, plus IvoryOS form inputs 
+    for PyLabRobot native core controls such as mix_volume and blow_out_air_volume.
+    """
+    pass

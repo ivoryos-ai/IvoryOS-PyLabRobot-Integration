@@ -48,11 +48,11 @@ print("\n--- Liquid Handler (Chatterbox) ---")
 lh = LiquidHandler(simulated=True, deck_json=LAYOUT)
 
 check("pick_up_tips(teaching_tip_rack, A1)",
-      lambda: lh.pick_up_tips(tip_rack_name="teaching_tip_rack", position="A1"))
+      lambda: lh.pick_up_tips(tip_rack_name="teaching_tip_rack", tip_spots="A1"))
 check("aspirate(source_plate, B2, 50 uL)",
-      lambda: lh.aspirate(plate_name="source_plate", well="B2", volume_ul=50))
+      lambda: lh.aspirate(plate_name="source_plate", resources="B2", vols=50))
 check("dispense(source_plate, C3, 50 uL)",
-      lambda: lh.dispense(plate_name="source_plate", well="C3", volume_ul=50))
+      lambda: lh.dispense(plate_name="source_plate", resources="C3", vols=50))
 check("return_tips()",
       lambda: lh.return_tips())
 

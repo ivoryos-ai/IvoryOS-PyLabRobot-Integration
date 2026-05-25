@@ -6,7 +6,7 @@
 
 ---
 
-## 🚀 Quick Start (Simulation)
+## Quick Start (Simulation)
 
 Develop and test your workflows with zero hardware. `plr-ivoryos` provides a built-in "headless" simulation mode that requires no configuration.
 
@@ -24,7 +24,7 @@ if __name__ == "__main__":
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 ### 1. Native PLR Naming
 Classes in `plr-ivoryos` use the exact same names as the original PyLabRobot classes (`LiquidHandler`, `Scale`, `Pump`, etc.). This makes the integration intuitive for PLR users while ensuring full compatibility with the IvoryOS ecosystem.
@@ -39,7 +39,7 @@ Setting `simulated=True` on any device wrapper automatically selects a suitable 
 
 ---
 
-## 🛠 Advanced Usage
+## Advanced Usage
 
 ### Custom Backends
 You can pass any standard PyLabRobot backend to the wrappers. This is how you connect to real hardware or specialized simulators.
@@ -65,9 +65,20 @@ lh = LiquidHandler(
 )
 ```
 
+### Advanced Liquid Handler (Pro Mode)
+For power users who need access to PyLabRobot's core mixing controls without leaving the IvoryOS UI, `plr-ivoryos` provides an `AdvancedLiquidHandler` class. 
+
+By simply swapping `LiquidHandler` for `AdvancedLiquidHandler`, IvoryOS will automatically render additional advanced parameters (such as `mix_volume`, `mix_repetitions`, `mix_flow_rate`, and `blow_out_air_volume`) directly in the UI for `aspirate`, `dispense`, and `transfer` commands. These values are automatically compiled into native PyLabRobot `Mix` dataclasses under the hood!
+
+```python
+from plr_ivoryos import AdvancedLiquidHandler
+
+lh = AdvancedLiquidHandler(simulated=True)
+```
+
 ---
 
-## 📋 Supported Devices
+## Supported Devices
 
 | Device Type | Class Name | Simulation Shortcut | Common Backends |
 | :--- | :--- | :---: | :--- |
@@ -82,7 +93,7 @@ lh = LiquidHandler(
 
 ---
 
-## ⚙️ Installation
+## Installation
 
 ```bash
 pip install plr-ivoryos
@@ -100,7 +111,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🏗 How it Works
+## How it Works
 
 ### Async Bridge
 PyLabRobot is built on `asyncio`. `plr-ivoryos` manages a dedicated background thread running a persistent event loop. All commands are safely bridged from the IvoryOS script-runner thread to the PLR loop, ensuring your UI stays responsive during long hardware operations.

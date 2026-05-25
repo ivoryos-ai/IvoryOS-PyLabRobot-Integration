@@ -30,7 +30,7 @@ Thermocycler
     Thermocycler
 """
 
-from plr_ivoryos.liquid_handler import LiquidHandler
+from plr_ivoryos.liquid_handler import LiquidHandler, AdvancedLiquidHandler
 from plr_ivoryos.simple import (
     Scale,
     Pump,
@@ -45,6 +45,7 @@ from plr_ivoryos.async_bridge import run_async, shutdown as shutdown_async
 
 __all__ = [
     "LiquidHandler",
+    "AdvancedLiquidHandler",
     "Scale",
     "Pump",
     "HeaterShaker",
