@@ -3,14 +3,14 @@ plr_ivoryos.liquid_handler
 ===========================
 IvoryOS-compatible proxy for a PyLabRobot LiquidHandler.
 
-The user instantiates PLRLiquidHandler in their deck file — that's all they write.
+The user instantiates PLRLiquidHandler in their deck file ΓÇö that's all they write.
 On construction this class:
 
   1. Reads the loaded PLR deck to discover all Plate, TipRack and Well resources.
   2. Generates three Enum classes at runtime:
-       PlateResource  — one member per Plate on the deck  (name → name)
-       TipRackResource— one member per TipRack on the deck (name → name)
-       WellPosition   — A1..H12 for standard 96-well plates
+       PlateResource  ΓÇö one member per Plate on the deck  (name ΓåÆ name)
+       TipRackResourceΓÇö one member per TipRack on the deck (name ΓåÆ name)
+       WellPosition   ΓÇö A1..H12 for standard 96-well plates
   3. Registers those Enums in plr4ivoryos._runtime_enums so that IvoryOS's
      form renderer can locate them via importlib (it resolves Enum types by
      module path).
@@ -155,16 +155,6 @@ def _load_deck_from_json(json_path: str) -> "Deck":
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_well_position_enum() -> type:
-    """Return WellPosition Enum covering A1..H12 (standard 96-well layout)."""
-    members = {
-        f"{row}{col}": f"{row}{col}"
-        for row in "ABCDEFGH"
-        for col in range(1, 13)
-    }
-    return Enum("WellPosition", members)  # type: ignore[return-value]
-
-
 def _make_resource_name_enum(name: str, resource_names: list[str]) -> type:
     """
     Build an Enum whose members are the resource instance names on the deck.
@@ -190,13 +180,11 @@ def _build_deck_enums(lh: LiquidHandler):
 
     PlateResourceEnum = _make_resource_name_enum("PlateResource", plate_names)
     TipRackResourceEnum = _make_resource_name_enum("TipRackResource", tip_rack_names)
-    WellPositionEnum = _make_well_position_enum()
 
     _runtime_enums.register_enum("PlateResource", PlateResourceEnum)
     _runtime_enums.register_enum("TipRackResource", TipRackResourceEnum)
-    _runtime_enums.register_enum("WellPosition", WellPositionEnum)
 
-    return PlateResourceEnum, TipRackResourceEnum, WellPositionEnum
+    return PlateResourceEnum, TipRackResourceEnum
 
 
 def _resolve_name(value) -> str:
@@ -215,27 +203,25 @@ def _build_proxy_class(
     resource_map: dict,
     PlateResource,
     TipRackResource,
-    WellPosition,
-    pro_mode: bool = False,
 ) -> type:
     """
     Construct a new class (unique per LiquidHandler instance) whose method
     signatures carry the runtime Enum types as annotations.
 
     Because the functions are defined inside this closure, their annotations
-    reference the local Enum classes directly — inspect.signature() will
+    reference the local Enum classes directly ΓÇö inspect.signature() will
     return Union[PlateResource, str] with the *actual* Enum class object.
     IvoryOS's _is_enum_type() / _unwrap_enum_type() will find the Enum inside
     the Union and render a FlexibleEnumField dropdown.
 
-    ⚠ Methods are SYNC (not async) on purpose.
+    ΓÜá Methods are SYNC (not async) on purpose.
     IvoryOS dispatches coroutines with asyncio.run(), which creates a fresh
-    event loop — conflicting with the background loop that lh.setup() ran on.
+    event loop ΓÇö conflicting with the background loop that lh.setup() ran on.
     Keeping methods sync and routing PLR calls through run_async() ensures
     every PLR call goes to the correct persistent background loop.
 
     Multi-step operations (transfer, mix) compose a single inner coroutine and
-    dispatch it once via run_async() — this keeps the whole sequence atomic on
+    dispatch it once via run_async() ΓÇö this keeps the whole sequence atomic on
     the background loop, preventing interleaving.
     """
     from plr_ivoryos.async_bridge import run_async
@@ -243,7 +229,34 @@ def _build_proxy_class(
     # Known names for error messages
     _plate_names = list(PlateResource.__members__.keys())
     _rack_names  = list(TipRackResource.__members__.keys())
-    _well_names  = list(WellPosition.__members__.keys())
+    
+
+    def _parse_list(val, num_items, default_type=float):
+        if val is None or str(val).strip() == "" or str(val).strip() == "None": 
+            return None
+            
+        def _parse_item(item):
+            if item is None: return None
+            if isinstance(item, str):
+                item = item.strip()
+                if item.lower() in ("none", "null", ""): return None
+            return default_type(item)
+        
+        if isinstance(val, (int, float)): 
+            parsed = [_parse_item(val)]
+        elif isinstance(val, str):
+            val = val.strip()
+            if val.startswith("[") and val.endswith("]"): val = val[1:-1]
+            # split by comma, allowing empty parts or 'None'
+            parsed = [_parse_item(x) for x in val.split(",")]
+        else:
+            parsed = [_parse_item(x) for x in val]
+            
+        if len(parsed) == 1 and num_items > 1:
+            parsed = parsed * num_items
+        elif len(parsed) != num_items and len(parsed) > 0:
+            raise ValueError(f"Expected {num_items} values, but got {len(parsed)}.")
+        return parsed
 
     def _get_resource(container_name: str, position: str, container_type: str):
         """Resolve resource_map[name][pos] with a clear error on bad inputs."""
@@ -266,43 +279,13 @@ def _build_proxy_class(
         except Exception:
             raise ValueError(
                 f"Well/position '{position}' not found on '{container_name}'. "
-                f"Valid positions: {_well_names[:6]} ... {_well_names[-3:]}"
+                f"Valid positions: {"A1, A2"} ... {"H12"}"
             )
-
-    def aspirate(
-        self,
-        plate_name: Union[PlateResource, str],
-        resources: Union[WellPosition, str],
-        vols: float = 100.0,
-        flow_rates: float = None,
-        **kwargs,
-    ):
-        """Aspirate liquid from a plate well.
-        Requires a tip to be loaded first (call pick_up_tips)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
-        if flow_rates is not None:
-            kwargs["flow_rates"] = [flow_rates]
-        run_async(lh.aspirate(resource, vols=[vols], **kwargs))
-
-    def dispense(
-        self,
-        plate_name: Union[PlateResource, str],
-        resources: Union[WellPosition, str],
-        vols: float = 100.0,
-        flow_rates: float = None,
-        **kwargs,
-    ):
-        """Dispense liquid into a plate well.
-        Requires a tip to be loaded first (call pick_up_tips)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
-        if flow_rates is not None:
-            kwargs["flow_rates"] = [flow_rates]
-        run_async(lh.dispense(resource, vols=[vols], **kwargs))
 
     def pick_up_tips(
         self,
         tip_rack_name: Union[TipRackResource, str],
-        tip_spots: Union[WellPosition, str],
+        tip_spots: str,
         **kwargs,
     ):
         """Pick up a tip from a tip rack. Call before aspirate/dispense."""
@@ -312,7 +295,7 @@ def _build_proxy_class(
     def drop_tips(
         self,
         tip_rack_name: Union[TipRackResource, str],
-        tip_spots: Union[WellPosition, str],
+        tip_spots: str,
         **kwargs,
     ):
         """Drop tips back to a specific tip rack position."""
@@ -327,111 +310,69 @@ def _build_proxy_class(
         """Permanently discard all currently held tips to the trash."""
         run_async(lh.discard_tips())
 
+    def aspirate(
+        self,
+        plate_name: Union[PlateResource, str],
+        resources: str,
+        vols: Union[float, str] = 100.0,
+        flow_rates: Union[float, str] = None,
+        mix_volume: float = None,
+        mix_repetitions: int = None,
+        mix_flow_rate: float = None,
+        blow_out_air_volume: float = None,
+        **kwargs,
+    ):
+        """Aspirate liquid from a plate well."""
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        call_kwargs = kwargs.copy()
+        parsed_flow_rates = _parse_list(flow_rates, len(resource)) if flow_rates is not None else None
+        if parsed_flow_rates is not None:
+            call_kwargs["flow_rates"] = parsed_flow_rates
+        if mix_volume is not None and mix_repetitions is not None:
+            from pylabrobot.liquid_handling.standard import Mix as PLRMix
+            fr = mix_flow_rate if mix_flow_rate is not None else (parsed_flow_rates[0] if parsed_flow_rates is not None else 20.0)
+            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)] * len(resource)
+        if blow_out_air_volume is not None:
+            call_kwargs["blow_out_air_volume"] = _parse_list(blow_out_air_volume, len(resource))
+        run_async(lh.aspirate(resource, vols=_parse_list(vols, len(resource)), **call_kwargs))
+
+    def dispense(
+        self,
+        plate_name: Union[PlateResource, str],
+        resources: str,
+        vols: Union[float, str] = 100.0,
+        flow_rates: Union[float, str] = None,
+        mix_volume: float = None,
+        mix_repetitions: int = None,
+        mix_flow_rate: float = None,
+        blow_out_air_volume: float = None,
+        **kwargs,
+    ):
+        """Dispense liquid into a plate well."""
+        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
+        call_kwargs = kwargs.copy()
+        parsed_flow_rates = _parse_list(flow_rates, len(resource)) if flow_rates is not None else None
+        if parsed_flow_rates is not None:
+            call_kwargs["flow_rates"] = parsed_flow_rates
+        if mix_volume is not None and mix_repetitions is not None:
+            from pylabrobot.liquid_handling.standard import Mix as PLRMix
+            fr = mix_flow_rate if mix_flow_rate is not None else (parsed_flow_rates[0] if parsed_flow_rates is not None else 20.0)
+            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)] * len(resource)
+        if blow_out_air_volume is not None:
+            call_kwargs["blow_out_air_volume"] = _parse_list(blow_out_air_volume, len(resource))
+        run_async(lh.dispense(resource, vols=_parse_list(vols, len(resource)), **call_kwargs))
+
     def transfer(
         self,
         source_plate: Union[PlateResource, str],
-        source_well: Union[WellPosition, str],
+        source_well: str,
         dest_plate: Union[PlateResource, str],
-        dest_well: Union[WellPosition, str],
+        dest_well: str,
         tip_rack_name: Union[TipRackResource, str],
-        tip_position: Union[WellPosition, str],
-        source_vol: float = 100.0,
-        aspiration_flow_rate: float = None,
-        dispense_flow_rates: float = None,
-        **kwargs,
-    ):
-        """
-        High-level transfer: pick up tip → aspirate → dispense → return tip.
-        All in one step. Runs as a single atomic coroutine on the background loop.
-        """
-        src_plate = _resolve_name(source_plate)
-        src_well  = _resolve_name(source_well)
-        dst_plate = _resolve_name(dest_plate)
-        dst_well  = _resolve_name(dest_well)
-        rack      = _resolve_name(tip_rack_name)
-        tip_pos   = _resolve_name(tip_position)
-
-        async def _transfer():
-            tip = _get_resource(rack, tip_pos, "rack")
-            await lh.pick_up_tips(tip) # tip pickup doesn't get the transfer kwargs, they are mostly for aspirate/dispense
-            
-            src = _get_resource(src_plate, src_well, "plate")
-            asp_kwargs = kwargs.copy()
-            if aspiration_flow_rate is not None:
-                asp_kwargs["flow_rates"] = [aspiration_flow_rate]
-            await lh.aspirate(src, vols=[source_vol], **asp_kwargs)
-            
-            dst = _get_resource(dst_plate, dst_well, "plate")
-            disp_kwargs = kwargs.copy()
-            if dispense_flow_rates is not None:
-                disp_kwargs["flow_rates"] = [dispense_flow_rates]
-            await lh.dispense(dst, vols=[source_vol], **disp_kwargs)
-            
-            await lh.return_tips()
-
-        run_async(_transfer())
-
-    def aspirate_pro(
-        self,
-        plate_name: Union[PlateResource, str],
-        resources: Union[WellPosition, str],
-        vols: float = 100.0,
-        flow_rates: float = None,
-        mix_volume: float = None,
-        mix_repetitions: int = None,
-        mix_flow_rate: float = None,
-        blow_out_air_volume: float = None,
-        **kwargs,
-    ):
-        """Aspirate liquid from a plate well (Pro Mode)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
-        call_kwargs = kwargs.copy()
-        if flow_rates is not None:
-            call_kwargs["flow_rates"] = [flow_rates]
-        if mix_volume is not None and mix_repetitions is not None:
-            from pylabrobot.liquid_handling.standard import Mix as PLRMix
-            fr = mix_flow_rate if mix_flow_rate is not None else (flow_rates if flow_rates is not None else 20.0)
-            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)]
-        if blow_out_air_volume is not None:
-            call_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
-        run_async(lh.aspirate(resource, vols=[vols], **call_kwargs))
-
-    def dispense_pro(
-        self,
-        plate_name: Union[PlateResource, str],
-        resources: Union[WellPosition, str],
-        vols: float = 100.0,
-        flow_rates: float = None,
-        mix_volume: float = None,
-        mix_repetitions: int = None,
-        mix_flow_rate: float = None,
-        blow_out_air_volume: float = None,
-        **kwargs,
-    ):
-        """Dispense liquid into a plate well (Pro Mode)."""
-        resource = _get_resource(_resolve_name(plate_name), _resolve_name(resources), "plate")
-        call_kwargs = kwargs.copy()
-        if flow_rates is not None:
-            call_kwargs["flow_rates"] = [flow_rates]
-        if mix_volume is not None and mix_repetitions is not None:
-            from pylabrobot.liquid_handling.standard import Mix as PLRMix
-            fr = mix_flow_rate if mix_flow_rate is not None else (flow_rates if flow_rates is not None else 20.0)
-            call_kwargs["mix"] = [PLRMix(volume=mix_volume, repetitions=mix_repetitions, flow_rate=fr)]
-        if blow_out_air_volume is not None:
-            call_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
-        run_async(lh.dispense(resource, vols=[vols], **call_kwargs))
-
-    def transfer_pro(
-        self,
-        source_plate: Union[PlateResource, str],
-        source_well: Union[WellPosition, str],
-        dest_plate: Union[PlateResource, str],
-        dest_well: Union[WellPosition, str],
-        tip_rack_name: Union[TipRackResource, str],
-        tip_position: Union[WellPosition, str],
-        source_vol: float = 100.0,
-        aspiration_flow_rate: float = None,
-        dispense_flow_rates: float = None,
+        tip_position: str,
+        source_vol: Union[float, str] = 100.0,
+        aspiration_flow_rate: Union[float, str] = None,
+        dispense_flow_rates: Union[float, str] = None,
         mix_before_aspirate_volume: float = None,
         mix_before_aspirate_repetitions: int = None,
         mix_after_dispense_volume: float = None,
@@ -440,7 +381,7 @@ def _build_proxy_class(
         blow_out_air_volume: float = None,
         **kwargs,
     ):
-        """High-level transfer (Pro Mode)."""
+        """High-level transfer."""
         src_plate = _resolve_name(source_plate)
         src_well  = _resolve_name(source_well)
         dst_plate = _resolve_name(dest_plate)
@@ -457,22 +398,22 @@ def _build_proxy_class(
             src = _get_resource(src_plate, src_well, "plate")
             asp_kwargs = kwargs.copy()
             if aspiration_flow_rate is not None:
-                asp_kwargs["flow_rates"] = [aspiration_flow_rate]
+                asp_kwargs["flow_rates"] = _parse_list(aspiration_flow_rate, len(src))
             if mix_before_aspirate_volume is not None and mix_before_aspirate_repetitions is not None:
                 fr = mix_flow_rate if mix_flow_rate is not None else (aspiration_flow_rate if aspiration_flow_rate is not None else 20.0)
                 asp_kwargs["mix"] = [PLRMix(volume=mix_before_aspirate_volume, repetitions=mix_before_aspirate_repetitions, flow_rate=fr)]
-            await lh.aspirate(src, vols=[source_vol], **asp_kwargs)
+            await lh.aspirate(src, vols=_parse_list(source_vol, len(src)), **asp_kwargs)
             
             dst = _get_resource(dst_plate, dst_well, "plate")
             disp_kwargs = kwargs.copy()
             if dispense_flow_rates is not None:
-                disp_kwargs["flow_rates"] = [dispense_flow_rates]
+                disp_kwargs["flow_rates"] = _parse_list(dispense_flow_rates, len(dst))
             if mix_after_dispense_volume is not None and mix_after_dispense_repetitions is not None:
                 fr = mix_flow_rate if mix_flow_rate is not None else (dispense_flow_rates if dispense_flow_rates is not None else 20.0)
                 disp_kwargs["mix"] = [PLRMix(volume=mix_after_dispense_volume, repetitions=mix_after_dispense_repetitions, flow_rate=fr)]
             if blow_out_air_volume is not None:
                 disp_kwargs["blow_out_air_volume"] = [blow_out_air_volume]
-            await lh.dispense(dst, vols=[source_vol], **disp_kwargs)
+            await lh.dispense(dst, vols=_parse_list(source_vol, len(src)), **disp_kwargs)
             
             await lh.return_tips()
 
@@ -481,10 +422,10 @@ def _build_proxy_class(
     def mix(
         self,
         plate_name: Union[PlateResource, str],
-        resources: Union[WellPosition, str],
-        vols: float = 50.0,
+        resources: str,
+        vols: Union[float, str] = 50.0,
         repetitions: int = 3,
-        flow_rates: float = None,
+        flow_rates: Union[float, str] = None,
         **kwargs,
     ):
         """Mix liquid in a well by repeatedly aspirating and dispensing."""
@@ -495,11 +436,11 @@ def _build_proxy_class(
             resource = _get_resource(plate, pos, "plate")
             mix_kwargs = kwargs.copy()
             if flow_rates is not None:
-                mix_kwargs["flow_rates"] = [flow_rates]
+                mix_kwargs["flow_rates"] = _parse_list(flow_rates, len(resource))
                 
             for _ in range(repetitions):
-                await lh.aspirate(resource, vols=[vols], **mix_kwargs)
-                await lh.dispense(resource, vols=[vols], **mix_kwargs)
+                await lh.aspirate(resource, vols=_parse_list(vols, len(resource)), **mix_kwargs)
+                await lh.dispense(resource, vols=_parse_list(vols, len(resource)), **mix_kwargs)
 
         run_async(_mix())
 
@@ -542,19 +483,19 @@ def _build_proxy_class(
         self._visualizer = visualizer
         return f"http://{visualizer.host}:{visualizer.fs_port}"
 
-    # Build the class dynamically — each instance gets its own class so
+    # Build the class dynamically ΓÇö each instance gets its own class so
     # the annotations embed *this* deck's Enum classes, not a shared global.
     ProxyClass = type(
         "LiquidHandlerProxy",
         (),
         {
-            "aspirate": aspirate_pro if pro_mode else aspirate,
-            "dispense": dispense_pro if pro_mode else dispense,
+            "aspirate": aspirate,
+            "dispense": dispense,
             "pick_up_tips": pick_up_tips,
             "drop_tips": drop_tips,
             "return_tips": return_tips,
             "discard_tips": discard_tips,
-            "transfer": transfer_pro if pro_mode else transfer,
+            "transfer": transfer,
             "mix": mix,
             "summary": summary,
             "start_visualizer": start_visualizer,
@@ -578,7 +519,7 @@ class LiquidHandler:
     Parameters
     ----------
     backend : LiquidHandlerBackend, optional
-        Any PLR backend — STARBackend, OpentronsOT2Backend, EVOBackend,
+        Any PLR backend ΓÇö STARBackend, OpentronsOT2Backend, EVOBackend,
         or LiquidHandlerChatterboxBackend for simulation.
     deck : Deck, optional
         A pre-built PLR Deck.  Mutually exclusive with *deck_json*.
@@ -611,11 +552,14 @@ class LiquidHandler:
             if deck is None and deck_json is None:
                 from pylabrobot.resources.hamilton import STARLetDeck
                 from pylabrobot.resources.corning.plates import Cor_96_wellplate_360ul_Fb
+                from pylabrobot.resources.biorad.plates import BioRad_384_wellplate_50uL_Vb
                 from pylabrobot.resources.hamilton import hamilton_96_tiprack_1000uL_filter
                 from pylabrobot.resources.coordinate import Coordinate
                 deck = STARLetDeck()
                 deck.assign_child_resource(Cor_96_wellplate_360ul_Fb(name="sim_plate"),
                                             location=Coordinate(100, 100, 0))
+                deck.assign_child_resource(BioRad_384_wellplate_50uL_Vb(name="sim_plate_384"),
+                                            location=Coordinate(200, 100, 0))
                 deck.assign_child_resource(hamilton_96_tiprack_1000uL_filter(name="sim_tips"),
                                             location=Coordinate(300, 100, 0))
 
@@ -641,13 +585,12 @@ class LiquidHandler:
         }
 
         # Generate Enums from the loaded deck and register them
-        PlateEnum, TipRackEnum, WellEnum = _build_deck_enums(_lh)
+        PlateEnum, TipRackEnum = _build_deck_enums(_lh)
 
         # Create a proxy class whose method signatures embed these Enums
-        pro_mode = (cls.__name__ == "AdvancedLiquidHandler")
-        ProxyClass = _build_proxy_class(_lh, resource_map, PlateEnum, TipRackEnum, WellEnum, pro_mode=pro_mode)
+        ProxyClass = _build_proxy_class(_lh, resource_map, PlateEnum, TipRackEnum)
 
-        # Instantiate the proxy — this is what IvoryOS will introspect
+        # Instantiate the proxy ΓÇö this is what IvoryOS will introspect
         instance = object.__new__(ProxyClass)
         instance._lh = _lh
         instance._resource_map = resource_map
@@ -658,10 +601,3 @@ class LiquidHandler:
         # because __new__ already set everything up.
         pass
 
-class AdvancedLiquidHandler(LiquidHandler):
-    """
-    Advanced IvoryOS-compatible liquid handler.
-    Provides all standard LiquidHandler functionality, plus IvoryOS form inputs 
-    for PyLabRobot native core controls such as mix_volume and blow_out_air_volume.
-    """
-    pass

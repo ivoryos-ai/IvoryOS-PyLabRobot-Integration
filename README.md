@@ -53,29 +53,31 @@ scale = Scale(backend=MettlerToledoWXS205SDU(port="COM3"))
 ```
 
 ### Visual Simulator
-To use PyLabRobot's 3D browser-based simulator, simply pass the `SimulatorBackend`:
+To use PyLabRobot's browser-based simulator, simply use `lh.start_visualizer()`:
 
 ```python
 from plr_ivoryos import LiquidHandler
 from pylabrobot.liquid_handling.backends import ChatterBoxBackend
 
-lh = LiquidHandler(
-    backend=ChatterBoxBackend(open_browser=True),
-    deck_json="my_layout.json"
+lh = LiquidHandler(backend=ChatterBoxBackend(), deck_json="my_layout.json"
 )
+lh.start_visualizer(open_browser=False)
 ```
 
-### Advanced Liquid Handler (Pro Mode)
-For power users who need access to PyLabRobot's core mixing controls without leaving the IvoryOS UI, `plr-ivoryos` provides an `AdvancedLiquidHandler` class. 
+### Multichannel & Advanced Controls
 
-By simply swapping `LiquidHandler` for `AdvancedLiquidHandler`, IvoryOS will automatically render additional advanced parameters (such as `mix_volume`, `mix_repetitions`, `mix_flow_rate`, and `blow_out_air_volume`) directly in the UI for `aspirate`, `dispense`, and `transfer` commands. These values are automatically compiled into native PyLabRobot `Mix` dataclasses under the hood!
+The `LiquidHandler` seamlessly supports PyLabRobot's advanced liquid handling capabilities directly from the IvoryOS interface:
+
+- **Slicing**: You can enter well slices (e.g., `"A1:A8"`, `"A1:C1"`) to perform multichannel operations.
+- **Dynamic List Parsing**: For parameters like `vols` or `flow_rates`, you can enter a single number (which automatically broadcasts to all selected wells) or a comma-separated list of numbers (e.g., `"100, 50, 200"`) for distinct volumes per channel.
+- **Native Pro Controls**: Form inputs for `mix_volume`, `mix_repetitions`, `blow_out_air_volume`, and more are provided out of the box, allowing granular pipetting control without writing any Python.
 
 ```python
-from plr_ivoryos import AdvancedLiquidHandler
+from plr_ivoryos import LiquidHandler
+from pylabrobot.liquid_handling.backends import ChatterBoxBackend
 
-lh = AdvancedLiquidHandler(simulated=True)
+lh = LiquidHandler(backend=ChatterBoxBackend())
 ```
-
 ---
 
 ## Supported Devices
