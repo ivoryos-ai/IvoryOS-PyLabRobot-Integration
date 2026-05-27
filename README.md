@@ -1,8 +1,16 @@
 # plr-ivoryos
 
+[![PyPI version](https://badge.fury.io/py/plr-ivoryos.svg)](https://pypi.org/project/plr-ivoryos/)
+
+
+> [!NOTE]
+> **This is a third-party integration package.** It is not the official PyLabRobot library. For the official PyLabRobot repository, please visit [PyLabRobot](https://github.com/PyLabRobot/pylabrobot).
+
 **The native PyLabRobot experience, powered by IvoryOS.**
 
-`plr-ivoryos` provides IvoryOS-compatible versions of standard [PyLabRobot](https://github.com/PyLabRobot/pylabrobot) classes. It allows you to build, simulate, and execute complex lab automation workflows using a visual interface, with **no manual wrapper code** required.
+`plr-ivoryos` provides IvoryOS-compatible UI wrappers for standard PyLabRobot classes. It allows you to build, simulate, and execute complex lab automation workflows using a visual interface, with **no manual wrapper code** required.
+
+![IvoryOS UI Screenshot](docs/ui_screenshot.png)
 
 ---
 
