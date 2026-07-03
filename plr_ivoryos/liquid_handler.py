@@ -3,14 +3,14 @@ plr_ivoryos.liquid_handler
 ===========================
 IvoryOS-compatible proxy for a PyLabRobot LiquidHandler.
 
-The user instantiates PLRLiquidHandler in their deck file ΓÇö that's all they write.
+The user instantiates PLRLiquidHandler in their deck file — that's all they write.
 On construction this class:
 
   1. Reads the loaded PLR deck to discover all Plate, TipRack and Well resources.
   2. Generates three Enum classes at runtime:
-       PlateResource  ΓÇö one member per Plate on the deck  (name ΓåÆ name)
-       TipRackResourceΓÇö one member per TipRack on the deck (name ΓåÆ name)
-       WellPosition   ΓÇö A1..H12 for standard 96-well plates
+       PlateResource  — one member per Plate on the deck  (name → name)
+       TipRackResource— one member per TipRack on the deck (name → name)
+       WellPosition   — A1..H12 for standard 96-well plates
   3. Registers those Enums in plr4ivoryos._runtime_enums so that IvoryOS's
      form renderer can locate them via importlib (it resolves Enum types by
      module path).
@@ -209,19 +209,19 @@ def _build_proxy_class(
     signatures carry the runtime Enum types as annotations.
 
     Because the functions are defined inside this closure, their annotations
-    reference the local Enum classes directly ΓÇö inspect.signature() will
+    reference the local Enum classes directly — inspect.signature() will
     return Union[PlateResource, str] with the *actual* Enum class object.
     IvoryOS's _is_enum_type() / _unwrap_enum_type() will find the Enum inside
     the Union and render a FlexibleEnumField dropdown.
 
-    ΓÜá Methods are SYNC (not async) on purpose.
+    ⚠️ Methods are SYNC (not async) on purpose.
     IvoryOS dispatches coroutines with asyncio.run(), which creates a fresh
-    event loop ΓÇö conflicting with the background loop that lh.setup() ran on.
+    event loop — conflicting with the background loop that lh.setup() ran on.
     Keeping methods sync and routing PLR calls through run_async() ensures
     every PLR call goes to the correct persistent background loop.
 
     Multi-step operations (transfer, mix) compose a single inner coroutine and
-    dispatch it once via run_async() ΓÇö this keeps the whole sequence atomic on
+    dispatch it once via run_async() — this keeps the whole sequence atomic on
     the background loop, preventing interleaving.
     """
     from plr_ivoryos.async_bridge import run_async
@@ -279,7 +279,7 @@ def _build_proxy_class(
         except Exception:
             raise ValueError(
                 f"Well/position '{position}' not found on '{container_name}'. "
-                f"Valid positions: {"A1, A2"} ... {"H12"}"
+                f"Valid positions: 'A1', 'A2' ... 'H12'"
             )
 
     def pick_up_tips(
@@ -483,7 +483,7 @@ def _build_proxy_class(
         self._visualizer = visualizer
         return f"http://{visualizer.host}:{visualizer.fs_port}"
 
-    # Build the class dynamically ΓÇö each instance gets its own class so
+    # Build the class dynamically — each instance gets its own class so
     # the annotations embed *this* deck's Enum classes, not a shared global.
     ProxyClass = type(
         "LiquidHandlerProxy",
@@ -519,7 +519,7 @@ class LiquidHandler:
     Parameters
     ----------
     backend : LiquidHandlerBackend, optional
-        Any PLR backend ΓÇö STARBackend, OpentronsOT2Backend, EVOBackend,
+        Any PLR backend — STARBackend, OpentronsOT2Backend, EVOBackend,
         or LiquidHandlerChatterboxBackend for simulation.
     deck : Deck, optional
         A pre-built PLR Deck.  Mutually exclusive with *deck_json*.
@@ -590,7 +590,7 @@ class LiquidHandler:
         # Create a proxy class whose method signatures embed these Enums
         ProxyClass = _build_proxy_class(_lh, resource_map, PlateEnum, TipRackEnum)
 
-        # Instantiate the proxy ΓÇö this is what IvoryOS will introspect
+        # Instantiate the proxy — this is what IvoryOS will introspect
         instance = object.__new__(ProxyClass)
         instance._lh = _lh
         instance._resource_map = resource_map
