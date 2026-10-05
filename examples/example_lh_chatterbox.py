@@ -1,36 +1,25 @@
 """
-plr4ivoryos example — Chatterbox simulator (no real hardware needed)
-=====================================================================
+plr-ivoryos example: PyLabRobot's simulator (no hardware needed)
+=================================================================
 
-The LiquidHandlerChatterboxBackend prints every command to the console instead
-of sending it to a real robot.  This lets you develop and demo the integration
-without owning a Hamilton, Opentrons, or Tecan instrument.
+The worktable (which robot, what sits where, what is in it) lives in worktable.json, not here.
+Edit that file, or use the Labware panel in IvoryOS NextGen, to change it.
 
-The deck layout (plates, tip racks, locations) lives in layout.json — no PLR
-resource imports needed in this file.  IvoryOS will only see `lh`.
-
-Run with:
-    python example_chatterbox.py
-
-IvoryOS will start at http://localhost:8000/ivoryos
+    python examples/example_lh_chatterbox.py
 """
 
-import sys
 import os
-
-from pylabrobot.liquid_handling import LiquidHandlerChatterboxBackend
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from plr_ivoryos import LiquidHandler
 
 lh = LiquidHandler(
-    backend=LiquidHandlerChatterboxBackend(),
-    deck_json=os.path.join(os.path.dirname(__file__), "layout.json"),
+    simulated=True,
+    deck_json=os.path.join(os.path.dirname(__file__), "worktable.json"),
 )
 
-lh.start_visualizer(open_browser=False)
-
 if __name__ == "__main__":
-    import ivoryos
-    ivoryos.run(__name__)
+    try:
+        import ivoryos_edge as server    # IvoryOS NextGen
+    except ImportError:
+        import ivoryos as server         # the original IvoryOS
+    server.run(__name__)

@@ -6,7 +6,8 @@ IvoryOS-compatible wrappers for PyLabRobot lab automation devices.
 Supported devices
 -----------------
 LiquidHandler (Hamilton STAR, Opentrons OT-2, Tecan EVO, Chatterbox simulator)
-    LiquidHandler  — proxy with Enum dropdowns for plate/well selection
+    LiquidHandler  — steps that take labware names and well selections, on a worktable
+                     described by a file (worktable.py)
 
 Scale (MettlerToledo, etc.)
     Scale
@@ -31,6 +32,8 @@ Thermocycler
 """
 
 from plr_ivoryos.liquid_handler import LiquidHandler
+from plr_ivoryos.wells import Labware, PerWell, Site, WellSelection, Wells, expand_wells
+from plr_ivoryos import worktable
 from plr_ivoryos.simple import (
     Scale,
     Pump,
@@ -45,6 +48,13 @@ from plr_ivoryos.async_bridge import run_async, shutdown as shutdown_async
 
 __all__ = [
     "LiquidHandler",
+    "Labware",
+    "Wells",
+    "PerWell",
+    "Site",
+    "WellSelection",
+    "expand_wells",
+    "worktable",
     "Scale",
     "Pump",
     "HeaterShaker",
@@ -57,4 +67,4 @@ __all__ = [
     "shutdown_async",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -89,6 +89,10 @@ class SimulatedScaleBackend:
         _log.info("[SimulatedScale] read_weight() → %.4f g", reading)
         return reading
 
+    async def read_weight(self, **kwargs) -> float:
+        """PyLabRobot 0.2.2 renamed the backend's get_weight to read_weight."""
+        return await self.get_weight(**kwargs)
+
     # Helper: set a new simulated weight (useful in test scripts) -------------
 
     def set_weight(self, weight: float) -> None:
@@ -221,7 +225,10 @@ class Scale:
 
     def read_weight(self) -> float:
         """Read the current weight in grams."""
-        return run_async(self._scale.get_weight())
+        # read_weight since PyLabRobot 0.2.2; get_weight before (now deprecated, and it calls the
+        # backend's read_weight, which older backends do not have).
+        reader = getattr(self._scale, "read_weight", None) or self._scale.get_weight
+        return run_async(reader())
 
     def shutdown(self):
         """Disconnect from the scale hardware."""

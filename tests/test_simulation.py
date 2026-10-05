@@ -21,6 +21,10 @@ from plr_ivoryos import (
     Centrifuge, PlateReader, Fan, Thermocycler
 )
 
+if __name__ != "__main__":
+    import pytest
+    pytest.skip("a script, not a pytest module: python tests/test_simulation.py", allow_module_level=True)
+
 LAYOUT = os.path.join(os.path.dirname(__file__), "layout.json")
 
 PASS_LABEL = "[PASS]"
@@ -47,14 +51,19 @@ def check(label, fn, expect_error=False):
 print("\n--- Liquid Handler (Chatterbox) ---")
 lh = LiquidHandler(simulated=True, deck_json=LAYOUT)
 
-check("pick_up_tips(teaching_tip_rack, A1)",
-      lambda: lh.pick_up_tips(tip_rack_name="teaching_tip_rack", tip_spots="A1"))
-check("aspirate(source_plate, B2, 50 uL)",
-      lambda: lh.aspirate(plate_name="source_plate", resources="B2", vols=50))
-check("dispense(source_plate, C3, 50 uL)",
-      lambda: lh.dispense(plate_name="source_plate", resources="C3", vols=50))
+check("load_liquid(source_plate[B2], 100 uL)",
+      lambda: lh.load_liquid(resources="source_plate[B2]", liquid="water", vols=100))
+check("pick_up_tips(teaching_tip_rack[A1])",
+      lambda: lh.pick_up_tips(tip_spots="teaching_tip_rack[A1]"))
+check("aspirate(source_plate[B2], 50 uL)",
+      lambda: lh.aspirate(resources="source_plate[B2]", vols=50))
+check("dispense(source_plate[C3], 50 uL)",
+      lambda: lh.dispense(resources="source_plate[C3]", vols=50))
 check("return_tips()",
       lambda: lh.return_tips())
+check("transfer(source_plate[B2] -> source_plate[C4:C5], 10 uL each)",
+      lambda: lh.transfer(source="source_plate[B2]", targets="source_plate[C4:C5]", target_vols=10,
+                          tip_rack="teaching_tip_rack") == {"source_plate[C4]": 10.0, "source_plate[C5]": 10.0})
 
 # -----------------------------------------------------------------------------
 print("\n--- Scale (Simulated) ---")

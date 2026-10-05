@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plr-ivoryos"
-version = "0.1.1"
+version = "0.2.0"
 description = "IvoryOS-compatible wrappers for PyLabRobot devices"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "IvoryOS Contributors"}
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
-    "pylabrobot>=0.2.0",
+    "pylabrobot>=0.2.2",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +27,10 @@ dev = ["pytest", "pytest-asyncio"]
 
 [project.urls]
 Homepage = "https://github.com/heingroup/ivoryos"
+
+[tool.setuptools.packages.find]
+include = ["plr_ivoryos*"]
+
+# The Labware view's page ships with the package (labware_view/__init__.py).
+[tool.setuptools.package-data]
+"plr_ivoryos.labware_view" = ["page/*"]
