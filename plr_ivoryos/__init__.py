@@ -29,6 +29,16 @@ Fan (Hamilton HEPA, etc.)
 
 Thermocycler
     Thermocycler
+TemperatureController (Inheco CPAC, Opentrons Temperature Module)
+    TemperatureController
+Sealer (Azenta a4S)
+    Sealer
+Peeler (Azenta XPeel)
+    Peeler
+Tilter (Hamilton tilt module)
+    Tilter
+BarcodeScanner (Keyence)
+    BarcodeScanner
 """
 
 from plr_ivoryos.liquid_handler import LiquidHandler
@@ -42,6 +52,11 @@ from plr_ivoryos.simple import (
     PlateReader,
     Fan,
     Thermocycler,
+    TemperatureController,
+    Sealer,
+    Peeler,
+    Tilter,
+    BarcodeScanner,
     SimulatedScaleBackend,
 )
 from plr_ivoryos.async_bridge import run_async, shutdown as shutdown_async
@@ -62,6 +77,11 @@ __all__ = [
     "PlateReader",
     "Fan",
     "Thermocycler",
+    "TemperatureController",
+    "Sealer",
+    "Peeler",
+    "Tilter",
+    "BarcodeScanner",
     "SimulatedScaleBackend",
     "run_async",
     "shutdown_async",
