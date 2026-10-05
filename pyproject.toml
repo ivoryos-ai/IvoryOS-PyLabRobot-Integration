@@ -19,7 +19,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
-    "pylabrobot>=0.2.2",
+    # 1.0 (in beta) renames resources and labware this package relies on; supporting it is a
+    # later release.
+    "pylabrobot>=0.2.2,<1.0",
 ]
 
 [project.optional-dependencies]

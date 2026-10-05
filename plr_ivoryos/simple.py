@@ -3,7 +3,7 @@ plr_ivoryos.simple
 ===================
 Thin, synchronous IvoryOS wrappers for PLR devices that have primitive-only
 arguments (Scale, Pump, HeaterShaker, Centrifuge, PlateReader, Fan,
-Thermocycler).
+Thermocycler, TemperatureController, Sealer, Peeler, Tilter, BarcodeScanner).
 
 These classes have no resource-model problem — every PLR method on these
 devices accepts plain Python scalars (float, int, str).  The only thing the
@@ -18,12 +18,14 @@ Simulator backends
 ------------------
 SimulatedScaleBackend  — in-memory scale; no hardware needed.
 Use it to develop and test Scale-based workflows inside IvoryOS immediately.
+SimulatedSealerBackend, SimulatedPeelerBackend, SimulatedBarcodeScannerBackend — the same for
+devices PyLabRobot 0.2.2 has no simulator for. The others use PyLabRobot's own chatterbox.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional, Union
+from typing import List, Literal, Optional, Union
 
 from plr_ivoryos.async_bridge import run_async
 
@@ -551,3 +553,279 @@ class Thermocycler:
     def shutdown(self):
         """Disconnect from the thermocycler."""
         run_async(self._tc.stop())
+
+
+# ---------------------------------------------------------------------------
+# Simulators for devices PyLabRobot 0.2.2 has none for
+# ---------------------------------------------------------------------------
+
+class SimulatedSealerBackend:
+    """A simulated PLR SealerBackend: remembers its temperature and logs each seal."""
+    def __init__(self, temperature: float = 25.0):
+        self._temperature = temperature
+    async def setup(self, **kwargs) -> None: _log.info("[SimulatedSealer] setup()")
+    async def stop(self, **kwargs) -> None: _log.info("[SimulatedSealer] stop()")
+    async def seal(self, temperature: int, duration: float):
+        self._temperature = float(temperature)
+        _log.info("[SimulatedSealer] seal(temperature=%s, duration=%s)", temperature, duration)
+    async def open(self): _log.info("[SimulatedSealer] open()")
+    async def close(self): _log.info("[SimulatedSealer] close()")
+    async def set_temperature(self, temperature: float): self._temperature = float(temperature)
+    async def get_temperature(self) -> float: return self._temperature
+
+
+class SimulatedPeelerBackend:
+    """A simulated PLR PeelerBackend."""
+    async def setup(self, **kwargs) -> None: _log.info("[SimulatedPeeler] setup()")
+    async def stop(self, **kwargs) -> None: _log.info("[SimulatedPeeler] stop()")
+    async def peel(self, **kwargs): _log.info("[SimulatedPeeler] peel(%s)", kwargs)
+    async def restart(self, **kwargs): _log.info("[SimulatedPeeler] restart()")
+
+
+class SimulatedBarcodeScannerBackend:
+    """A simulated PLR BarcodeScannerBackend. Hands out `codes` in turn, then SIM-0001, SIM-0002..."""
+    def __init__(self, codes: Optional[List[str]] = None):
+        self._codes = list(codes or [])
+        self._count = 0
+    async def setup(self, **kwargs) -> None: _log.info("[SimulatedBarcodeScanner] setup()")
+    async def stop(self, **kwargs) -> None: _log.info("[SimulatedBarcodeScanner] stop()")
+    async def scan_barcode(self):
+        from pylabrobot.resources.barcode import Barcode
+        self._count += 1
+        data = self._codes.pop(0) if self._codes else f"SIM-{self._count:04d}"
+        return Barcode(data=data, symbology="Code128", position_on_resource="front")
+
+
+# ---------------------------------------------------------------------------
+# TemperatureController
+# ---------------------------------------------------------------------------
+
+class TemperatureController:
+    """
+    IvoryOS wrapper for a PyLabRobot TemperatureController: a block that heats or cools a plate.
+
+    Parameters
+    ----------
+    backend : TemperatureControllerBackend
+        e.g. InhecoCPACBackend(index=1, control_box=InhecoTECControlBox(...)), or
+        OpentronsTemperatureModuleUSBBackend(port="/dev/ttyACM0")
+    name : str
+        Resource name.
+    simulated : bool
+        If True, use PyLabRobot's TemperatureControllerChatterboxBackend.
+    """
+
+    def __init__(self, backend=None, name: str = "temperature_controller", simulated: bool = False,
+                 size_x: float = 0, size_y: float = 0, size_z: float = 0, child_location=None):
+        if simulated:
+            from pylabrobot.temperature_controlling import TemperatureControllerChatterboxBackend
+            backend = TemperatureControllerChatterboxBackend(dummy_temperature=25.0)
+        if backend is None:
+            raise ValueError("Provide either 'backend' or 'simulated=True'.")
+        from pylabrobot.temperature_controlling import TemperatureController as _TemperatureController
+        from pylabrobot.resources.coordinate import Coordinate
+        self._tc = _TemperatureController(
+            backend=backend, name=name,
+            size_x=size_x, size_y=size_y, size_z=size_z,
+            child_location=child_location or Coordinate.zero(),
+        )
+        run_async(self._tc.setup())
+
+    def set_temperature(self, temperature: float = 37.0, passive: bool = False) -> None:
+        """Set the target temperature in °C. With *passive*, a block that cannot cool lets a lower
+        temperature be reached by switching its heater off instead of refusing."""
+        run_async(self._tc.set_temperature(temperature, passive=passive))
+
+    def get_temperature(self) -> float:
+        """Read the current block temperature in °C."""
+        return run_async(self._tc.get_temperature())
+
+    def wait_for_temperature(self, timeout: float = 300.0, tolerance: float = 0.5) -> None:
+        """Wait until the block is within *tolerance* °C of its target, for at most *timeout* s."""
+        run_async(self._tc.wait_for_temperature(timeout=timeout, tolerance=tolerance))
+
+    def deactivate(self) -> None:
+        """Stop temperature control."""
+        run_async(self._tc.deactivate())
+
+    def shutdown(self) -> None:
+        """Stop temperature control and disconnect."""
+        run_async(self._tc.stop())
+
+
+# ---------------------------------------------------------------------------
+# Sealer
+# ---------------------------------------------------------------------------
+
+class Sealer:
+    """
+    IvoryOS wrapper for a PyLabRobot plate Sealer (heat sealing a foil onto a plate).
+
+    Parameters
+    ----------
+    backend : SealerBackend
+        e.g. A4SBackend(port="COM5") (Azenta a4S)
+    simulated : bool
+        If True, use SimulatedSealerBackend.
+    """
+
+    def __init__(self, backend=None, simulated: bool = False):
+        if simulated:
+            backend = SimulatedSealerBackend()
+        if backend is None:
+            raise ValueError("Provide either 'backend' or 'simulated=True'.")
+        from pylabrobot.sealing import Sealer as _Sealer
+        self._sealer = _Sealer(backend=backend)
+        run_async(self._sealer.setup())
+
+    def seal(self, temperature: int, duration: float) -> None:
+        """Seal the plate in the sealer at *temperature* °C, pressing for *duration* seconds."""
+        run_async(self._sealer.seal(temperature=temperature, duration=duration))
+
+    def open(self) -> None:
+        """Move the shuttle out, to put a plate on or take it off."""
+        run_async(self._sealer.open())
+
+    def close(self) -> None:
+        """Move the shuttle in."""
+        run_async(self._sealer.close())
+
+    def set_temperature(self, temperature: float) -> None:
+        """Heat the sealing plate to *temperature* °C ahead of sealing."""
+        run_async(self._sealer.set_temperature(temperature))
+
+    def get_temperature(self) -> float:
+        """Read the sealing plate's temperature in °C."""
+        return run_async(self._sealer.get_temperature())
+
+    def shutdown(self) -> None:
+        """Disconnect from the sealer."""
+        run_async(self._sealer.stop())
+
+
+# ---------------------------------------------------------------------------
+# Peeler
+# ---------------------------------------------------------------------------
+
+class Peeler:
+    """
+    IvoryOS wrapper for a PyLabRobot plate Peeler (taking a seal off a plate).
+
+    Parameters
+    ----------
+    backend : PeelerBackend
+        e.g. XPeelBackend(port="COM6") (Azenta XPeel)
+    simulated : bool
+        If True, use SimulatedPeelerBackend.
+    """
+
+    def __init__(self, backend=None, simulated: bool = False):
+        if simulated:
+            backend = SimulatedPeelerBackend()
+        if backend is None:
+            raise ValueError("Provide either 'backend' or 'simulated=True'.")
+        from pylabrobot.peeling.peeler import Peeler as _Peeler
+        self._peeler = _Peeler(backend=backend)
+        run_async(self._peeler.setup())
+
+    def peel(self, begin_location: Literal[-2, 0, 2, 4] = 0, fast: bool = False, adhere_time: float = 2.5) -> None:
+        """Peel the seal off the plate in the peeler. *begin_location* is where the peel starts,
+        in mm from the default; *adhere_time* how long the tape is pressed on (s)."""
+        run_async(self._peeler.peel(begin_location=begin_location, fast=fast, adhere_time=adhere_time))
+
+    def restart(self) -> None:
+        """Restart the peeler, e.g. after an error."""
+        run_async(self._peeler.restart())
+
+    def shutdown(self) -> None:
+        """Disconnect from the peeler."""
+        run_async(self._peeler.stop())
+
+
+# ---------------------------------------------------------------------------
+# Tilter
+# ---------------------------------------------------------------------------
+
+class Tilter:
+    """
+    IvoryOS wrapper for a PyLabRobot tilt module: tilts a plate so a liquid handler can reach the
+    last of each well.
+
+    Parameters
+    ----------
+    com_port : str
+        The Hamilton tilt module's serial port.
+    name : str
+        Resource name.
+    simulated : bool
+        If True, a Hamilton tilt module on PyLabRobot's TilterChatterboxBackend.
+    backend : TilterBackend, optional
+        Another backend, on the Hamilton tilt module's geometry.
+    """
+
+    def __init__(self, com_port: Optional[str] = None, name: str = "tilter", simulated: bool = False, backend=None):
+        if simulated:
+            from pylabrobot.tilting.chatterbox import TilterChatterboxBackend
+            backend = TilterChatterboxBackend()
+        if backend is None and not com_port:
+            raise ValueError("Provide 'com_port', a 'backend', or 'simulated=True'.")
+        if backend is None:
+            from pylabrobot.tilting import HamiltonTiltModule
+            self._tilter = HamiltonTiltModule(name=name, com_port=com_port)
+        else:
+            # The Hamilton module's geometry (as HamiltonTiltModule), built here because that class
+            # opens its own serial backend, which a simulator has no port for.
+            from pylabrobot.resources.coordinate import Coordinate
+            from pylabrobot.tilting import Tilter as _Tilter
+            self._tilter = _Tilter(
+                name=name, size_x=132, size_y=92.57, size_z=85.81, backend=backend,
+                hinge_coordinate=Coordinate(6.18, 0, 72.85), child_location=Coordinate(1.0, 3.0, 83.55),
+                category="tilter", model="HamiltonTiltModule",
+            )
+        run_async(self._tilter.setup())
+
+    def set_angle(self, absolute_angle: float) -> None:
+        """Tilt to *absolute_angle* degrees (0 is flat)."""
+        run_async(self._tilter.set_angle(absolute_angle))
+
+    def tilt(self, relative_angle: float) -> None:
+        """Tilt by *relative_angle* degrees from where it is."""
+        run_async(self._tilter.tilt(relative_angle))
+
+    def shutdown(self) -> None:
+        """Disconnect from the tilt module."""
+        run_async(self._tilter.stop())
+
+
+# ---------------------------------------------------------------------------
+# BarcodeScanner
+# ---------------------------------------------------------------------------
+
+class BarcodeScanner:
+    """
+    IvoryOS wrapper for a PyLabRobot BarcodeScanner.
+
+    Parameters
+    ----------
+    backend : BarcodeScannerBackend
+        e.g. KeyenceBarcodeScannerBackend(port="COM7")
+    simulated : bool
+        If True, use SimulatedBarcodeScannerBackend.
+    """
+
+    def __init__(self, backend=None, simulated: bool = False):
+        if simulated:
+            backend = SimulatedBarcodeScannerBackend()
+        if backend is None:
+            raise ValueError("Provide either 'backend' or 'simulated=True'.")
+        from pylabrobot.barcode_scanners import BarcodeScanner as _BarcodeScanner
+        self._scanner = _BarcodeScanner(backend=backend)
+        run_async(self._scanner.setup())
+
+    def scan(self) -> str:
+        """Read the barcode in front of the scanner and return its text."""
+        return run_async(self._scanner.scan()).data
+
+    def shutdown(self) -> None:
+        """Disconnect from the scanner."""
+        run_async(self._scanner.stop())
