@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plr-ivoryos"
-version = "0.2.0"
+version = "0.2.1"
 description = "IvoryOS-compatible wrappers for PyLabRobot devices"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# PyLabRobot keeps each connection library in an extra; these pass them through, so one requirement
+# installs what an instrument needs (plr-ivoryos[usb] for a Hamilton STAR, [serial] for a sealer).
+serial = ["pylabrobot[serial]>=0.2.2,<1.0"]
+usb = ["pylabrobot[usb]>=0.2.2,<1.0"]
+ftdi = ["pylabrobot[ftdi]>=0.2.2,<1.0"]
+hid = ["pylabrobot[hid]>=0.2.2,<1.0"]
+opentrons = ["pylabrobot[opentrons]>=0.2.2,<1.0"]
+sila = ["pylabrobot[sila]>=0.2.2,<1.0"]
 dev = ["pytest", "pytest-asyncio"]
 
 [project.urls]
