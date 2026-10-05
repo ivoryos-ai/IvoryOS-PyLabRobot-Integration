@@ -22,7 +22,7 @@ microlitre.
 ```python
 from plr_ivoryos import LiquidHandler, Scale
 
-lh = LiquidHandler(simulated=True, deck_json="worktable.json")   # written on the first edit
+lh = LiquidHandler(simulated=True)    # its worktable is worktable.json, written on the first edit
 scale = Scale(simulated=True)
 
 if __name__ == "__main__":
@@ -53,7 +53,8 @@ robot and the IvoryOS Hub can ship the file with an install:
 }
 ```
 
-- `deck_type`: `OTDeck`, `STARLetDeck`, `STARDeck`, `EVO100Deck`, `EVO150Deck`, `EVO200Deck`.
+- `deck_type`: `OTDeck`, `STARLetDeck`, `STARDeck`, `NimbusDeck`, `VantageDeck_1.3`, `EVO100Deck`,
+  `EVO150Deck`, `EVO200Deck`.
 - `type`: any labware definition in `pylabrobot.resources`, placed by `slot` (Opentrons),
   `rails` (Hamilton, Tecan) or `location` ({x, y, z} mm). Carriers list what they hold in
   `children`, by `site`.
@@ -61,6 +62,14 @@ robot and the IvoryOS Hub can ship the file with an install:
   an aspirate from a well nobody filled is refused; fill it here or with a `load_liquid` step.
 
 Layout files written for 0.1 still load.
+
+`deck_json` is optional. Without it the file is `worktable.json` in the deck's data folder when
+IvoryOS runs it (`IVORYOS_DATA_DIR`, which the desktop app sets), else in the working directory; a
+relative `deck_json` is in that folder too. A file that does not exist yet is not an error: the
+simulator starts from a ready-made worktable (tips, a reservoir with buffer and dye, two plates), a
+real robot from its own empty one (`deck_type` says which model, e.g. `STARDeck` rather than the
+default STARlet), and the file is written on the first change. So a deck made in the desktop app,
+with nothing but a backend chosen, is built from scratch in the Labware panel.
 
 Beside it, plr-ivoryos keeps PyLabRobot's own description of the same worktable up to date, so a
 plain PyLabRobot script (or anyone without this package) uses the layout as designed:
@@ -75,14 +84,14 @@ Those two are written whenever the worktable is loaded or changed, from the file
 (not from a deck a run has used tips from). Edit `worktable.json`; the others are output.
 PyLabRobot 0.2.2 cannot read back its own Tecan wash station, so a Tecan worktable gets none (the
 Labware panel says so). In IvoryOS NextGen the Labware panel edits this file:
-place or remove labware from PyLabRobot's catalogue, and on the simulator switch the robot
-(OT-2, STARlet, STAR, EVO) without touching the script.
+place or remove labware from PyLabRobot's catalogue, switch the robot without touching the script,
+and import a layout you already have.
 
 A real robot is the same line with its backend:
 
 ```python
 from pylabrobot.liquid_handling.backends import OpentronsOT2Backend
-lh = LiquidHandler(backend=OpentronsOT2Backend(host="10.0.0.5"), deck_json="worktable.json")
+lh = LiquidHandler(backend=OpentronsOT2Backend(host="10.0.0.5"))
 ```
 
 The connection opens on the first step, so a deck starts with the robot switched off.
@@ -144,8 +153,14 @@ beside every page. **Edit layout** changes the worktable file as you go, with no
 - drag anything already there to move it, × to take it off, and rename it in the list;
 - click a plate or reservoir, pick wells (click or drag), and **Fill** them with a liquid and a
   volume: that is the `liquids` a run starts from, and it applies at once;
-- on the simulator, **Robot** switches between OT-2, STARlet, STAR and EVO. Each robot keeps its
-  own worktable in the file, so switching back loses nothing.
+- **Robot** switches the worktable: on the simulator between every robot (OT-2, STARlet, STAR,
+  Nimbus, Vantage, EVO 100/150/200), on a real robot between its own models (a STAR or a STARlet,
+  an EVO 100, 150 or 200). Each keeps its own worktable in the file, so switching back loses nothing;
+- **Import a layout…** takes a layout you already have: a worktable file, a 0.1 layout, or
+  PyLabRobot's own deck file (`deck.save(...)` or `lh.save(...)`). Labware PyLabRobot names by
+  definition is kept by name; custom labware is kept exactly as serialized. The worktable it
+  replaces is kept as `worktable.before-import.json`. A real robot only takes its own kind of
+  worktable, and only before it is connected (restart the deck first).
 
 Steps offer added, moved or renamed labware once the deck restarts (the panel offers the restart).
 The panel is the only part of this package that imports IvoryOS, and only IvoryOS NextGen loads it.

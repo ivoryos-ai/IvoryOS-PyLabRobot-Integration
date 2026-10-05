@@ -8,7 +8,8 @@ wells show what they hold, tip racks which tips are left, and the wells a step i
 up while it runs. With "Edit layout" it changes the worktable the way a person changes the real
 one, saved to its worktable file: drag labware from PyLabRobot's catalogue onto a place (or a
 carrier onto the rails), drag what is there to move it, rename or remove it, fill wells with a
-liquid, and on the simulator switch the robot. Nothing moves.
+liquid, switch the robot (or, on a real one, its model), or import a layout someone already has.
+Nothing moves.
 
 Only IvoryOS NextGen loads this module, and it provides `ivoryos_edge`; the rest of plr-ivoryos
 does not import it. Served at /plugins/labware/ (page), /plugins/labware/api/{layout,state,
@@ -99,7 +100,7 @@ def get_catalog():
     out = {}
     for name, (instrument, _) in _worktables().items():
         found = _call(instrument, "__ivoryos_labware_catalog__")
-        out[name] = found if isinstance(found, dict) else {"labware": [], "decks": [], "deck": None}
+        out[name] = found if isinstance(found, dict) else {"labware": [], "decks": [], "deck": None, "importable": False}
     return {"worktables": out}
 
 
@@ -120,4 +121,5 @@ def edit(change: dict):
     if result.get("restart", True):
         _restart_pending.add(str(change.get("worktable")))
     return {"layout": layout(), "catalog": get_catalog()["worktables"], "state": state(),
-            "restart_needed": bool(result.get("restart", True)), "name": result.get("name")}
+            "restart_needed": bool(result.get("restart", True)), "name": result.get("name"),
+            "kept": os.path.basename(result["kept"]) if result.get("kept") else None}

@@ -228,17 +228,120 @@ def test_a_layout_written_for_0_1_still_loads(capsys):
     assert "source_plate" in old.__ivoryos_labware__()["labware"]
 
 
-def test_simulated_with_no_file_starts_from_a_working_worktable(capsys):
+def test_with_no_file_the_worktable_is_in_the_decks_data_folder(tmp_path, monkeypatch, capsys):
+    """The desktop app gives each deck a data folder (IVORYOS_DATA_DIR): a LiquidHandler with no
+    deck_json keeps its worktable there, so a deck made there needs no path typed in."""
+    monkeypatch.setenv("IVORYOS_DATA_DIR", str(tmp_path))
     lh = LiquidHandler(simulated=True)
     assert {"tips", "reservoir", "assay_plate"} <= set(lh.__ivoryos_labware__()["labware"])
-    assert lh.__ivoryos_labware_catalog__() == {"labware": [], "decks": [], "deck": "STARLetDeck"}, \
-        "no file to save to, so nothing to edit"
+    assert "no worktable at" in capsys.readouterr().out and not (tmp_path / "worktable.json").exists()
+    assert lh.__ivoryos_labware_catalog__()["importable"], "it has a file to save to, so it can be edited"
+    lh.__ivoryos_labware_edit__("rename", name="sample_plate", to="samples")
+    assert json.loads((tmp_path / "worktable.json").read_text())["deck_type"] == "STARLetDeck"
+    assert "samples" in LiquidHandler(simulated=True, deck_json="worktable.json").__ivoryos_labware__()["labware"], \
+        "a relative path is in the data folder too"
+    # A second liquid handler on the same deck is not handed the same file.
+    assert LiquidHandler(simulated=True)._path == str(tmp_path / "worktable_2.json")
 
 
-def test_a_missing_file_or_bad_definition_is_said_plainly(tmp_path):
-    from pylabrobot.liquid_handling.backends import LiquidHandlerChatterboxBackend
-    with pytest.raises(FileNotFoundError, match="Worktable file not found"):
-        LiquidHandler(backend=LiquidHandlerChatterboxBackend(), deck_json=str(tmp_path / "nope.json"))
+def test_a_real_robot_starts_from_its_own_empty_worktable(tmp_path, monkeypatch, capsys):
+    """Chosen in the desktop app with nothing but a backend: the worktable is the robot's own, empty,
+    built in the Labware panel. Nothing connects until a step runs."""
+    from pylabrobot.liquid_handling.backends import STARBackend
+    monkeypatch.setenv("IVORYOS_DATA_DIR", str(tmp_path))
+    lh = LiquidHandler(backend=STARBackend())
+    layout = lh.__ivoryos_labware__()
+    assert layout["deck"]["kind"] == "STARLetDeck" and not layout["deck"]["simulated"]
+    assert not [w for w in layout["labware"].values() if w["editable"]], "empty, but for what the deck comes with"
+    catalog = lh.__ivoryos_labware_catalog__()
+    assert [d["kind"] for d in catalog["decks"]] == ["STARLetDeck", "STARDeck"], "its own models, and only those"
+    assert "PLT_CAR_L5AC_A00" in {e["definition"] for e in catalog["labware"]}
+    lh.__ivoryos_labware_edit__("place", definition="PLT_CAR_L5AC_A00", rails=15)
+    assert lh.__ivoryos_labware_edit__("deck", deck="STARDeck") == {"name": "STARDeck", "restart": True}
+    assert lh.__ivoryos_labware__()["deck"]["kind"] == "STARDeck" and lh._lh.backend.__class__ is STARBackend
+    with pytest.raises(ValueError, match="takes a Hamilton STARlet or Hamilton STAR worktable, not an Opentrons OT-2"):
+        lh.__ivoryos_labware_edit__("deck", deck="OTDeck")
+    lh.__ivoryos_labware_edit__("deck", deck="STARLetDeck")
+    assert [f["definition"] for f in lh.__ivoryos_labware__()["fixtures"] if f["editable"]] == ["PLT_CAR_L5AC_A00"], \
+        "each model kept its own"
+    assert not lh._ready, "nothing was connected to"
+    assert LiquidHandler(backend=STARBackend(), deck_json="star.json", deck_type="STARDeck") \
+        .__ivoryos_labware__()["deck"]["kind"] == "STARDeck"
+
+
+@pytest.mark.parametrize("kind", ["NimbusDeck", "VantageDeck_1.3"])
+def test_a_worktable_with_no_starter_is_built_from_empty(kind, tmp_path, capsys):
+    lh = LiquidHandler(simulated=True, deck_json=str(tmp_path / "w.json"), deck_type=kind)
+    assert lh.__ivoryos_labware__()["deck"]["kind"] == kind and lh.__ivoryos_labware__()["deck"]["rails"]
+    lh.__ivoryos_labware_edit__("place", definition="PLT_CAR_L5AC_A00", rails=10)
+    lh.__ivoryos_labware_edit__("place", definition="TIP_CAR_480_A00", rails=3)
+    sites = [s["label"] for s in lh.__ivoryos_labware__()["sites"]]
+    lh.__ivoryos_labware_edit__("place", definition="hamilton_96_tiprack_300uL_filter", site=sites[0], name="tips")
+    lh.__ivoryos_labware_edit__("place", definition="cor_96_wellplate_360uL_Fb", site=sites[-1], name="assay_plate")
+    lh.__ivoryos_labware_edit__("place", definition="cor_96_wellplate_360uL_Fb", site=sites[-2], name="source")
+    lh.__ivoryos_labware_edit__("liquid", labware="source", wells="A1:H1", liquid="buffer", volume_ul=100)
+    # Tips are discarded too: a Nimbus has a waste position per channel rather than one trash.
+    assert lh.transfer(source="source[A1:H1]", targets="assay_plate[A1:H1]", target_vols=20, tip_rack="tips") == \
+        {f"assay_plate[{r}1]": 20.0 for r in "ABCDEFGH"}
+    assert not lh._mounted()
+
+
+def test_a_layout_someone_already_has_is_imported(tmp_path, capsys):
+    """Not everyone starts from scratch: a worktable file, a 0.1 layout, or PyLabRobot's own deck
+    file becomes this worktable, by name where PyLabRobot recorded a definition."""
+    from pylabrobot.resources import Deck
+    star = LiquidHandler(simulated=True, deck_json=write(tmp_path, worktable.starter("STARLetDeck"), "star.json"))
+    plr_file = (tmp_path / "star.pylabrobot.json").read_text()
+    back = worktable.read_layout(plr_file)
+    ours = worktable.starter("STARLetDeck")
+    assert back["deck_type"] == "STARLetDeck" and back["resources"] == ours["resources"], "the same file, by name"
+    ot = LiquidHandler(simulated=True, deck_json=write(tmp_path, OT2))
+    assert worktable.read_layout((tmp_path / "worktable.pylabrobot.json").read_text())["resources"] == OT2["resources"]
+
+    # Labware PyLabRobot has no definition name for is kept as it was serialized.
+    data = json.loads(plr_file)
+    custom = Deck.deserialize(data).get_resource("assay_plate")
+    for carrier in data["children"]:
+        for holder in carrier.get("children") or []:
+            for child in holder.get("children") or []:
+                if child["name"] == "assay_plate":
+                    child["model"] = "our_lab_plate"
+    imported = worktable.read_layout(json.dumps(data))
+    entry = next(c for r in imported["resources"] for c in r.get("children") or [] if c["name"] == "assay_plate")
+    assert "serialized" in entry and "type" not in entry
+
+    # Into a worktable from the panel: the simulator becomes that robot, the old one is kept.
+    assert ot.__ivoryos_labware_edit__("import", content=json.dumps(data), filename="star.json") == \
+        {"name": "STARLetDeck", "restart": True, "kept": str(tmp_path / "worktable.before-import.json")}
+    assert json.loads((tmp_path / "worktable.before-import.json").read_text())["deck_type"] == "OTDeck"
+    assert ot._lh.deck.get_resource("assay_plate").get_absolute_location() == custom.get_absolute_location()
+    # A layout says where things are, not what is in them: liquids are filled again.
+    ot.__ivoryos_labware_edit__("liquid", labware="reservoir", wells="A1", liquid="buffer", volume_ul=1000)
+    assert ot.transfer(source="reservoir[A1]", targets="assay_plate[A1:H1]", target_vols=10, tip_rack="tips") == \
+        {f"assay_plate[{r}1]": 10.0 for r in "ABCDEFGH"}
+    again = LiquidHandler(simulated=True, deck_json=str(tmp_path / "worktable.json"))
+    assert again.__ivoryos_labware__()["deck"]["kind"] == "STARLetDeck"
+
+    # A 0.1 layout, and what is not a layout.
+    assert worktable.read_layout(open(os.path.join(HERE, "layout.json")).read())["deck_type"] == "STARLetDeck"
+    for text, why in [((tmp_path / "star.pylabrobot-state.json").read_text(), "state file"),
+                      ("not json", "not a JSON layout"), ("[1, 2]", "expected a JSON object"),
+                      ('{"name": "x"}', "neither a worktable file"),
+                      ('{"deck_type": "OTDeck", "resources": [{"name": "p", "type": "no_such", "slot": 1}]}', "no_such")]:
+        with pytest.raises(ValueError, match=why):
+            ot.__ivoryos_labware_edit__("import", content=text, filename="f.json")
+
+    # A real robot takes only its own kind of worktable.
+    from pylabrobot.liquid_handling.backends import STARBackend
+    real = LiquidHandler(backend=STARBackend(), deck_json=str(tmp_path / "real.json"))
+    with pytest.raises(ValueError, match="takes a Hamilton STARlet or Hamilton STAR worktable"):
+        real.__ivoryos_labware_edit__("import", content=json.dumps(OT2), filename="ot.json")
+    assert "kept" not in real.__ivoryos_labware_edit__("import", content=plr_file, filename="star.pylabrobot.json"), \
+        "nothing was saved there yet, so nothing is kept"
+    assert "tips" in real.__ivoryos_labware__()["labware"]
+
+
+def test_a_bad_definition_is_said_plainly(tmp_path):
     bad = {"deck_type": "OTDeck", "resources": [{"name": "p", "type": "cor_96_wellplate_360ul", "slot": 1}]}
     with pytest.raises(ValueError, match="Did you mean"):
         LiquidHandler(simulated=True, deck_json=write(tmp_path, bad))
@@ -425,12 +528,14 @@ def test_a_real_robot_or_a_deck_built_in_code_is_not_rearranged_from_ivoryos(tmp
     real = LiquidHandler(backend=Robot(), deck_json=write(tmp_path, OT2))
     assert real.__ivoryos_labware_catalog__()["decks"] == [] and real.__ivoryos_labware_catalog__()["labware"]
     real.__ivoryos_labware_edit__("place", site="7", definition="cor_96_wellplate_360uL_Fb", name="extra")
-    with pytest.raises(ValueError, match="only the simulator"):
+    with pytest.raises(ValueError, match="takes an Opentrons OT-2 worktable, not a Hamilton STARlet one"):
         real.__ivoryos_labware_edit__("deck", deck="STARLetDeck")
+    with pytest.raises(ValueError, match="does not say which robot it is: give deck_type"):
+        LiquidHandler(backend=Robot(), deck_json=str(tmp_path / "nope.json"))
 
     built = LiquidHandler(simulated=True, deck=worktable.build_deck(OT2))
     assert built.__ivoryos_labware_catalog__()["labware"] == []
-    with pytest.raises(ValueError, match="no file to save to"):
+    with pytest.raises(ValueError, match="built in code"):
         built.__ivoryos_labware_edit__("remove", name="assay_plate")
 
 

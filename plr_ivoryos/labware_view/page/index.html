@@ -41,6 +41,7 @@
     .plain { border: 1px solid var(--line); background: transparent; border-radius: 7px; padding: 3px 10px; }
     .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; padding: 7px 9px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-fg); font-size: 12px; }
     .note.error { background: var(--err-bg); color: var(--err-fg); }
+    .note.info { background: var(--soft); color: var(--ink); }
     .note button { margin-left: auto; }
     #stage { border: 1px solid var(--line); border-radius: 12px; background: var(--deck); overflow: hidden; position: relative; user-select: none; touch-action: none; }
     svg { display: block; width: 100%; height: auto; max-height: 64vh; }
@@ -133,6 +134,8 @@
     // Editing: changes apply as they are made (no confirming); `restart` once the deck must restart
     // for steps to offer what changed; `notice` is the last refusal, in the driver's words.
     let editing = false, restart = false, notice = null, query = "", armed = null;
+    let imported = null;                    // the file last imported, said once
+    let lastResult = null;                  // what the last change answered
     let picked = new Set();                 // wells chosen on the zoomed labware, for a liquid
     let liquid = { name: "", volume: "" };  // what the fill bar holds
     let geom = null;                        // how the drawing maps to millimetres
@@ -202,7 +205,7 @@
       $("tabs").innerHTML = names.length > 1
         ? names.map(n => `<button class="tab ${n === current ? "on" : ""}" data-tab="${esc(n)}">${esc(n)}</button>`).join("") : "";
       const offered = catalogs[current] || {};
-      const canEdit = (offered.labware || []).length > 0 || (offered.decks || []).length > 0;
+      const canEdit = (offered.labware || []).length > 0 || (offered.decks || []).length > 0 || offered.importable;
       $("edit").hidden = !canEdit;
       $("edit").classList.toggle("on", editing);
       $("edit").textContent = editing ? "Done" : "Edit layout";
@@ -329,7 +332,14 @@
     function renderNotes() {
       let html = "";
       if (notice) html += `<div class="note error"><span>${esc(notice)}</span><button class="plain" id="dismiss">OK</button></div>`;
+      if (imported) html += `<div class="note info"><span>Imported ${esc(imported.file)}.${imported.kept ? ` The worktable it replaced is kept beside it as ${esc(imported.kept)}.` : ""}</span><button class="plain" id="seen">OK</button></div>`;
       if (restart) html += `<div class="note"><span>The worktable changed. Steps offer what changed once the deck restarts.</span><button class="act" id="restart">Restart deck</button></div>`;
+      // A worktable with nothing on it yet (a real robot's, the first time): say how to start.
+      const layout = layouts[current];
+      const placed = layout && [...Object.values(layout.labware || {}), ...(layout.fixtures || [])].some(w => w.editable);
+      if (layout && !editing && !placed && (catalogs[current] || {}).importable) {
+        html += `<div class="note info"><span>Nothing is on this worktable yet. <b>Edit layout</b> to put labware on it, or to import a layout you already have.</span></div>`;
+      }
       $("notes").innerHTML = html;
     }
 
@@ -359,8 +369,14 @@
       const rails = ((layouts[current] || {}).deck || {}).rails || [];
       let html = "";
       if ((offered.decks || []).length) {
-        html += `<div class="row"><label for="deck">Robot</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select>
-          <span class="kind">each robot keeps its own worktable</span></div>`;
+        const simulated = ((layouts[current] || {}).deck || {}).simulated;
+        html += `<div class="row"><label for="deck">${simulated ? "Robot" : "Model"}</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select>
+          <span class="kind">each keeps its own worktable</span></div>`;
+      }
+      if (offered.importable) {
+        // A layout someone already has: this package's file, a 0.1 layout, or PyLabRobot's own.
+        html += `<div class="row"><button class="plain" id="import">Import a layout…</button><input type="file" id="importfile" accept=".json,application/json" hidden>
+          <span class="kind">a worktable file, or PyLabRobot's own (<code>deck.save</code>)</span></div>`;
       }
       html += `<p>${rails.length ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware onto an empty slot."} Drag what is there to move it. Click a plate or reservoir to fill its wells. Nothing on the robot moves.</p>`;
       const deck = (layouts[current] || {}).deck || {};
@@ -397,6 +413,7 @@
       const response = await fetch("api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ worktable: current, ...change }) });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) { notice = result.error || "That could not be done."; render(); return false; }
+      lastResult = result;
       if (result.restart_needed) restart = true;
       layouts = (result.layout || {}).worktables || layouts;
       catalogs = result.catalog || catalogs;
@@ -566,6 +583,8 @@
       const tab = t.closest("[data-tab]"), remove = t.closest("[data-remove]"), row = t.closest("tr[data-ware]");
       if (t.id === "edit") { editing = !editing; notice = null; armed = null; picked = new Set(); render(); return; }
       if (t.id === "dismiss") { notice = null; render(); return; }
+      if (t.id === "seen") { imported = null; render(); return; }
+      if (t.id === "import") { $("importfile").click(); return; }
       if (t.id === "restart") {
         fetch("/api/system/restart", { method: "POST" }).then(async r => {
           if (r.ok) { restart = false; editing = false; notice = null; }
@@ -616,6 +635,13 @@
     });
     document.addEventListener("change", evt => {
       if (evt.target.id === "deck") { zoomed = null; picked = new Set(); applyEdit({ action: "deck", deck: evt.target.value }); }
+      if (evt.target.id === "importfile" && evt.target.files.length) {
+        const file = evt.target.files[0];
+        file.text().then(content => {
+          zoomed = null; picked = new Set(); imported = null;
+          return applyEdit({ action: "import", content, filename: file.name });
+        }).then(ok => { if (ok) { imported = { file: file.name, kept: lastResult && lastResult.kept }; render(); } });
+      }
       if (evt.target.dataset && evt.target.dataset.rename !== undefined) {
         const from = evt.target.dataset.rename, to = evt.target.value.trim();
         if (to && to !== from) { if (zoomed === from) zoomed = to; applyEdit({ action: "rename", name: from, to }); }

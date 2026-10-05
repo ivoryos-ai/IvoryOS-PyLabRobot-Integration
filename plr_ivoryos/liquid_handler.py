@@ -80,6 +80,30 @@ def _box(resource) -> Dict[str, float]:
             "w": round(resource.get_absolute_size_x(), 2), "h": round(resource.get_absolute_size_y(), 2)}
 
 
+# Default worktable files handed out in this process, so two liquid handlers do not share one.
+_defaults_taken: set = set()
+
+
+def _worktable_path(deck_json: Optional[str]) -> str:
+    """Where the worktable file is. A relative path, and the default when none is given, is in the
+    deck's data folder when IvoryOS runs it (IVORYOS_DATA_DIR, which the desktop app sets), else in
+    the working directory. So a deck made in the desktop app needs no path typed in."""
+    base = os.environ.get("IVORYOS_DATA_DIR") or os.environ.get("IVORYOS_EDGE_HOME") or os.getcwd()
+    if deck_json:
+        return os.path.abspath(deck_json if os.path.isabs(deck_json) else os.path.join(base, deck_json))
+    n, name = 1, "worktable.json"
+    while os.path.abspath(os.path.join(base, name)) in _defaults_taken:
+        n += 1
+        name = f"worktable_{n}.json"
+    path = os.path.abspath(os.path.join(base, name))
+    _defaults_taken.add(path)
+    return path
+
+
+def _a(word: str) -> str:
+    return "an" if word[:1].upper() in "AEIOU" else "a"
+
+
 def _simulator(channels: int):
     from pylabrobot.liquid_handling.backends import LiquidHandlerChatterboxBackend
     return LiquidHandlerChatterboxBackend(num_channels=int(channels))
@@ -89,8 +113,12 @@ class LiquidHandler:
     """A liquid handler driven through PyLabRobot. Steps take labware names and wells.
 
     backend       any PyLabRobot liquid-handler backend (STARBackend, OpentronsOT2Backend, ...)
-    deck_json     the worktable file (worktable.py). With `simulated=True` it may not exist yet:
-                  the robot's starter worktable is used and the file is written on the first edit.
+    deck_json     the worktable file (worktable.py). Optional: it defaults to worktable.json in the
+                  deck's data folder. A file that does not exist yet starts the worktable (the
+                  simulator's ready-made one, or a real robot's empty one), and is written on the
+                  first change. A relative path is in the data folder too.
+    deck_type     which worktable, when there is no file yet: one of worktable.DECKS. Defaults to
+                  the robot's (the backend says which family; the first of it) or, simulated, a STARlet.
     deck          a PyLabRobot deck built in code, instead of deck_json
     simulated     use PyLabRobot's simulator (LiquidHandlerChatterboxBackend) when no backend is given
     channels      the simulator's channels
@@ -100,7 +128,8 @@ class LiquidHandler:
     """
 
     def __init__(self, backend=None, deck=None, deck_json: Optional[str] = None, simulated: bool = False,
-                 channels: int = 8, tracking: bool = True, step_delay_s: float = 0.0, **kwargs):
+                 channels: int = 8, tracking: bool = True, step_delay_s: float = 0.0,
+                 deck_type: Optional[str] = None, **kwargs):
         if tracking:
             set_tip_tracking(True)
             set_volume_tracking(True)
@@ -110,23 +139,29 @@ class LiquidHandler:
             raise ValueError("Give a PyLabRobot backend, or simulated=True to use PyLabRobot's simulator.")
         if deck is not None and deck_json:
             raise ValueError("Give deck (built in code) or deck_json (a worktable file), not both.")
-        self._path = os.path.abspath(deck_json) if deck_json else None
+        self._simulated = type(backend).__name__.lower().endswith("chatterboxbackend")
+        # The worktables this robot can have: any, simulated; its own models, real.
+        self._family = list(worktable.DECKS) if self._simulated else worktable.decks_for(backend)
+        self._path: Optional[str] = None
         # The worktable as data, kept so it can be edited and saved. None for a deck built in code.
         self._config: Optional[dict] = None
         if deck is None:
-            if self._path and os.path.exists(self._path):
+            self._path = _worktable_path(deck_json)
+            if os.path.exists(self._path):
                 self._config = worktable.load(self._path)
-            elif simulated:
-                self._config = worktable.starter(worktable.DEFAULT_DECK)
-            elif self._path:
-                raise FileNotFoundError(f"Worktable file not found: {self._path}")
             else:
-                raise ValueError("Give deck_json (a worktable file), deck, or simulated=True.")
+                kind = deck_type or (worktable.DEFAULT_DECK if self._simulated else (self._family or [None])[0])
+                if not kind:
+                    raise ValueError(f"There is no worktable file at {self._path}, and {type(backend).__name__} does not say "
+                                     f"which robot it is: give deck_type (one of {', '.join(worktable.DECKS)}).")
+                self._config = worktable.starter(kind) if self._simulated else {"deck_type": kind, "resources": [], "liquids": []}
+                print(f"plr-ivoryos: no worktable at {self._path} yet: starting "
+                      f"{'a ready-made' if self._simulated else 'an empty'} {worktable.DECKS.get(kind, kind)} one, "
+                      "written there on the first change.")
             deck = worktable.build_deck(self._config)
         self._channels_default = int(channels)
         self._kwargs = kwargs
         self._lh = _PLRLiquidHandler(backend=backend, deck=deck, **kwargs)
-        self._simulated = type(backend).__name__.lower().endswith("chatterboxbackend")
         self._delay = float(step_delay_s) if self._simulated else 0.0
         self._ready = False
         self._setting_up: Optional[asyncio.Lock] = None
@@ -324,15 +359,17 @@ class LiquidHandler:
     # --- changing the worktable (IvoryOS's Labware view) ------------------------------------------
 
     def __ivoryos_labware_catalog__(self) -> dict:
-        """What can be put on this worktable (with carriers where it has rails), and which robots it
-        can be switched to. Empty when there is no worktable file to save a change to; robots only
-        on the simulator, since a real robot is the robot it is."""
+        """What can be put on this worktable (with carriers where it has rails), and which worktables
+        it can be switched to: any, simulated; a real robot's own models (a STAR or a STARlet).
+        Empty for a deck built in code, which has no file to save a change to."""
         editable = self._config is not None and self._path is not None
         kind = (self._config or {}).get("deck_type")
+        offered = self._family if self._simulated or len(self._family) > 1 else []
         return {
             "labware": worktable.catalog(kind) if editable else [],
-            "decks": worktable.describe_decks() if editable and self._simulated else [],
+            "decks": worktable.describe_decks(offered) if editable else [],
             "deck": kind,
+            "importable": editable,
         }
 
     def __ivoryos_labware_edit__(self, action: str, **change) -> dict:
@@ -343,16 +380,21 @@ class LiquidHandler:
             rename  name, to
             remove  name (a carrier takes what is on it with it)
             liquid  labware, wells, liquid, volume_ul: what those wells hold (empty with no liquid)
-            deck    deck: another robot (simulator only); each robot keeps its own worktable
+            deck    deck: another robot (the simulator: any; a real one: its own models); each keeps
+                    its own worktable
+            import  content: a layout someone already has (this package's file, a 0.1 layout, or
+                    PyLabRobot's own deck file), replacing this worktable; a worktable file it
+                    replaces is kept beside it as worktable.before-import.json (`kept`)
 
         Saved to the worktable file at once. Returns {"restart": True} when steps only offer the
         change after a restart (labware names are part of the deck's schema). Raises ValueError for
         what cannot be done."""
         if self._config is None or self._path is None:
-            raise ValueError("This worktable has no file to save to: give the LiquidHandler deck_json to edit it here.")
+            raise ValueError("This worktable was built in code (deck=...), so there is no file to save a change to.")
         structural = action != "liquid"
         if structural and self._mounted():
             raise ValueError("Tips are on the head: drop them before changing the worktable.")
+        self._kept = None
         with self._lock:
             if action == "place":
                 name = self._edit_place(str(change.get("definition", "")), change.get("site"), change.get("rails"),
@@ -368,13 +410,15 @@ class LiquidHandler:
                                          str(change.get("liquid") or "").strip(), change.get("volume_ul"))
             elif action == "deck":
                 name = self._edit_deck(str(change.get("deck", "")))
+            elif action == "import":
+                name = self._edit_import(str(change.get("content") or ""), str(change.get("filename") or "the file"))
             else:
                 raise ValueError(f"'{action}' is not something that can be done to a worktable.")
             self._layout = None
             worktable.save(self._path, self._config)
             self._export_pylabrobot()  # the layout, and the starting liquids, as PyLabRobot reads them
         self._notify("layout" if structural else "load", name)
-        return {"name": name, "restart": structural}
+        return {"name": name, "restart": structural, **({"kept": self._kept} if self._kept else {})}
 
     def _check_name(self, name: str) -> None:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
@@ -560,27 +604,57 @@ class LiquidHandler:
                 self._contents.pop((name, well), None)
         return labware
 
-    def _edit_deck(self, kind: str) -> str:
-        if not self._simulated:
-            raise ValueError("A real robot's worktable is the robot's own; only the simulator can be switched.")
-        if kind not in worktable.DECKS:
+    def _check_kind(self, kind: str) -> None:
+        if kind in self._family:
+            return
+        if self._simulated:
             raise ValueError(f"'{kind}' is not a robot this can simulate ({', '.join(worktable.DECKS)}).")
-        current = self._config.get("deck_type") or worktable.DEFAULT_DECK
-        if kind == current:
-            return kind
-        # Each robot keeps the worktable it had, so switching back loses nothing.
-        others = dict(self._config.pop("other_worktables", None) or {})
-        others[current] = {k: v for k, v in self._config.items() if k != "format"}
-        self._config = others.pop(kind, None) or worktable.starter(kind)
-        if others:
-            self._config["other_worktables"] = others
-        self._lh = _PLRLiquidHandler(backend=_simulator(self._channel_count()),
-                                     deck=worktable.build_deck(self._config), **self._kwargs)
+        current = (self._config or {}).get("deck_type") or worktable.DEFAULT_DECK
+        own = " or ".join(worktable.DECKS.get(k, k) for k in self._family or [current])
+        other = worktable.DECKS.get(kind, kind)
+        raise ValueError(f"This robot takes {_a(own)} {own} worktable, not {_a(other)} {other} one.")
+
+    def _rebuild(self, config: dict) -> None:
+        """Use `config` as the worktable from now on. A connected robot is not set up again behind
+        the person's back: they restart the deck first."""
+        if not self._simulated and self._ready:
+            raise ValueError("The robot is connected: restart the deck, then change its worktable.")
+        backend = _simulator(self._channel_count()) if self._simulated else self._lh.backend
+        self._config = config
+        self._lh = _PLRLiquidHandler(backend=backend, deck=worktable.build_deck(config), **self._kwargs)
         self._ready = False
         self._setting_up = None
         self._contents.clear()
         self._in_tips.clear()
         self._load_liquids()
+
+    def _edit_deck(self, kind: str) -> str:
+        self._check_kind(kind)
+        current = self._config.get("deck_type") or worktable.DEFAULT_DECK
+        if kind == current:
+            return kind
+        # Each robot keeps the worktable it had, so switching back loses nothing.
+        others = dict(self._config.get("other_worktables") or {})
+        others[current] = {k: v for k, v in self._config.items() if k not in ("format", "other_worktables")}
+        config = others.pop(kind, None) or (worktable.starter(kind) if self._simulated
+                                            else {"deck_type": kind, "resources": [], "liquids": []})
+        if others:
+            config["other_worktables"] = others
+        self._rebuild(config)
+        return kind
+
+    def _edit_import(self, content: str, filename: str) -> str:
+        if not content.strip():
+            raise ValueError("The file is empty.")
+        config = worktable.read_layout(content)
+        kind = config.get("deck_type") or worktable.DEFAULT_DECK
+        self._check_kind(kind)
+        if self._config.get("other_worktables"):
+            config["other_worktables"] = self._config["other_worktables"]
+        if os.path.exists(self._path):
+            self._kept = os.path.splitext(self._path)[0] + ".before-import.json"
+            worktable.save(self._kept, self._config)
+        self._rebuild(config)
         return kind
 
     # --- resolving names ------------------------------------------------------------------------------
@@ -686,10 +760,26 @@ class LiquidHandler:
     async def _drop(self, how: str = "discard") -> None:
         if not self._mounted():
             return
-        await (self._lh.return_tips() if how == "return" else self._lh.discard_tips())
+        if how == "return":
+            await self._lh.return_tips()
+        else:
+            await self._discard()
         with self._lock:
             self._in_tips.clear()
         await self._emit("drop_tips")
+
+    async def _discard(self) -> None:
+        """PyLabRobot's discard_tips, into the resource called "trash". A Nimbus has a waste
+        position per channel instead (default_long_1, ...), so there each channel drops into its own."""
+        try:
+            self._lh.deck.get_trash_area()
+        except Exception:
+            wastes = [r for r in self._lh.deck.get_all_resources() if isinstance(r, Trash)]
+            channels = self._mounted()
+            if len(wastes) >= len(channels):
+                await self._lh.drop_tips([wastes[c] for c in channels], use_channels=channels)
+                return
+        await self._lh.discard_tips()
 
     # --- liquid ---------------------------------------------------------------------------------------
 

@@ -13,10 +13,12 @@ command-line flag:
       "liquids": [{"labware": "reservoir", "wells": "A1", "liquid": "buffer", "volume_ul": 14000}]
     }
 
-- `deck_type` is a PyLabRobot deck: OTDeck, STARLetDeck, STARDeck, EVO100Deck, EVO150Deck,
-  EVO200Deck. Default STARLetDeck.
+- `deck_type` is one of DECKS: OTDeck, STARLetDeck, STARDeck, NimbusDeck, VantageDeck_1.3,
+  EVO100Deck, EVO150Deck, EVO200Deck. Default STARLetDeck.
 - Each resource is a PyLabRobot definition (`type`, any name in `pylabrobot.resources`) placed by
   `slot` (Opentrons), `rails` (Hamilton, Tecan) or `location` ({x, y, z} in mm, as in 0.1).
+  One with no definition name (a custom labware, from an imported PyLabRobot file) is kept as
+  PyLabRobot serialized it, under `serialized`.
   A carrier lists what it holds in `children`, each with the `site` it sits on.
 - `liquids` is what a person put on the worktable before the run.
 - A `{"name": "trash", "type": "Trash", "site": 3}` child is a trash in a carrier position (a Tecan
@@ -31,8 +33,9 @@ size and absolute position, which plain PyLabRobot loads with `Deck.load_from_js
 `worktable.pylabrobot-state.json`, full tip racks and the starting liquids, for
 `deck.load_state_from_file`. Those copies are output; edit this one.
 
-IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, change robot)
-through the LiquidHandler.
+IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, change robot) through
+the LiquidHandler, and imports a layout someone already has (`read_layout`): a file like this one,
+a 0.1 layout, or PyLabRobot's own deck file (`deck.save`, `LiquidHandler.save`).
 """
 
 import copy
@@ -50,16 +53,44 @@ from plr_ivoryos.wells import ALL, expand_wells
 FORMAT = "plr-ivoryos-worktable/1"
 DEFAULT_DECK = "STARLetDeck"
 
-# Decks that can be built with no arguments, and what a person calls them. (VantageDeck needs a
-# size, and is reached by passing a built `deck=` instead.)
+# The worktables this can build, and what a person calls them. (PyLabRobot has no 2.0 m Vantage
+# deck yet.)
 DECKS = {
     "OTDeck": "Opentrons OT-2",
     "STARLetDeck": "Hamilton STARlet",
     "STARDeck": "Hamilton STAR",
+    "NimbusDeck": "Hamilton Nimbus",
+    "VantageDeck_1.3": "Hamilton Vantage 1.3 m",
     "EVO100Deck": "Tecan EVO 100",
     "EVO150Deck": "Tecan EVO 150",
     "EVO200Deck": "Tecan EVO 200",
 }
+# Kinds whose PyLabRobot deck takes an argument.
+_DECK_ARGS = {"VantageDeck_1.3": ("VantageDeck", {"size": 1.3}), "VantageDeck": ("VantageDeck", {"size": 1.3})}
+
+# Which worktables a real robot can have, by its backend's class (the first is the default). The
+# simulator can be any of them. A robot's worktable is fixed by the robot, but within a family a
+# person says which model it is (a STAR or a STARlet, an EVO 100, 150 or 200).
+FAMILIES = {
+    "OpentronsOT2Backend": ["OTDeck"],
+    "STARBackend": ["STARLetDeck", "STARDeck"],
+    "NimbusBackend": ["NimbusDeck"],
+    "VantageBackend": ["VantageDeck_1.3"],
+    "EVOBackend": ["EVO150Deck", "EVO100Deck", "EVO200Deck"],
+}
+
+
+def decks_for(backend) -> List[str]:
+    """The worktables this backend's robot can have: its family, or none for an unknown backend."""
+    for cls in type(backend).__mro__:
+        if cls.__name__ in FAMILIES:
+            return list(FAMILIES[cls.__name__])
+    return []
+
+
+def make_deck(kind: str):
+    factory, kwargs = _DECK_ARGS.get(kind, (kind, {}))
+    return resolve(factory)(**kwargs)
 
 _SEARCH = ["pylabrobot.resources", "pylabrobot.resources.hamilton", "pylabrobot.resources.corning",
            "pylabrobot.resources.opentrons", "pylabrobot.resources.thermo_fisher", "pylabrobot.resources.greiner"]
@@ -89,18 +120,27 @@ def make(definition: str, name: str, size=None):
     return resolve(definition)(name=name)
 
 
+def _resource_for(entry: dict, size=None):
+    """A worktable entry's resource: by definition name, or (imported, with no definition of that
+    name) exactly as PyLabRobot serialized it."""
+    if entry.get("serialized"):
+        from pylabrobot.resources import Resource
+        return Resource.deserialize({**entry["serialized"], "name": entry["name"]})
+    return make(entry["type"], entry["name"], size)
+
+
 def _place(deck, entry: dict) -> None:
-    resource = make(entry["type"], entry["name"], entry.get("size"))
+    resource = _resource_for(entry, entry.get("size"))
     if isinstance(resource, Carrier):
         for child in entry.get("children") or []:
             site = int(child["site"])
             holder = resource.children[site]
             size = (holder.get_size_x(), holder.get_size_y(), 0)
-            resource.assign_resource_to_site(make(child["type"], child["name"], size), spot=site)
+            resource.assign_resource_to_site(_resource_for(child, size), spot=site)
     elif entry.get("children"):
         for child in entry["children"]:
             at = child.get("location") or {}
-            resource.assign_child_resource(make(child["type"], child["name"]),
+            resource.assign_child_resource(_resource_for(child),
                                            location=Coordinate(at.get("x", 0), at.get("y", 0), at.get("z", 0)))
     if "slot" in entry:
         deck.assign_child_at_slot(resource, int(entry["slot"]))
@@ -113,7 +153,7 @@ def _place(deck, entry: dict) -> None:
 
 def build_deck(config: dict):
     """The PyLabRobot deck a worktable file describes."""
-    deck = resolve(config.get("deck_type") or DEFAULT_DECK)()
+    deck = make_deck(config.get("deck_type") or DEFAULT_DECK)
     for entry in config.get("resources") or []:
         _place(deck, entry)
     return deck
@@ -129,7 +169,7 @@ def rails_of(deck) -> List[Dict[str, float]]:
     count = getattr(deck, "num_rails", None)
     if not count:
         return []
-    if hasattr(deck, "rails_to_location"):
+    if hasattr(deck, "rails_to_location"):  # Hamilton STAR, STARlet, Nimbus, Vantage
         return [{"rail": n, "x": round(deck.rails_to_location(n).x, 2)} for n in range(1, count + 1)]
     pitch = _RAIL_PITCH.get(type(deck).__name__, 25.0)
     return [{"rail": n, "x": round(100 + (n - 1) * pitch, 2)} for n in range(1, count + 1)]
@@ -296,7 +336,8 @@ _KINDS = {"Plate": "plate", "TecanPlate": "plate", "TipRack": "tip_rack", "Tecan
           "PlateCarrier": "carrier", "TipCarrier": "carrier", "TroughCarrier": "carrier", "TubeCarrier": "carrier",
           "MFXCarrier": "carrier", "TecanPlateCarrier": "carrier", "TecanTipCarrier": "carrier"}
 # Which maker's tips and carriers fit which robot. Plates, reservoirs and tube racks fit any.
-_MAKER = {"OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton",
+_MAKER = {"OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton", "NimbusDeck": "hamilton",
+          "VantageDeck_1.3": "hamilton", "VantageDeck": "hamilton",
           "EVO100Deck": "tecan", "EVO150Deck": "tecan", "EVO200Deck": "tecan"}
 
 
@@ -346,5 +387,137 @@ def catalog(deck_type: Optional[str] = None) -> List[Dict[str, str]]:
     return out
 
 
-def describe_decks() -> List[Dict[str, Any]]:
-    return [{"kind": kind, "label": label, "starter": kind in STARTERS} for kind, label in DECKS.items()]
+def describe_decks(kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    return [{"kind": kind, "label": DECKS.get(kind, kind), "starter": kind in STARTERS}
+            for kind in (kinds if kinds is not None else DECKS)]
+
+
+# --- Reading a layout someone already has -------------------------------------------------------
+
+def kind_of(deck) -> str:
+    """Which of DECKS a PyLabRobot deck is."""
+    name = type(deck).__name__
+    rails = getattr(deck, "num_rails", None)
+    if name == "HamiltonSTARDeck":
+        return "STARLetDeck" if rails == 32 else "STARDeck"
+    if name == "TecanDeck":
+        return {30: "EVO100Deck", 45: "EVO150Deck", 69: "EVO200Deck"}.get(rails, "EVO150Deck")
+    if name == "VantageDeck":
+        return "VantageDeck_1.3"  # the only size PyLabRobot builds
+    if name in DECKS:
+        return name
+    raise ValueError(f"A {name} is not a worktable this knows ({', '.join(DECKS.values())}).")
+
+
+_by_model: Optional[Dict[str, str]] = None
+
+
+def _definition_of(resource) -> Optional[str]:
+    """The definition a resource was made from: PyLabRobot records it as `model` for most (230 of
+    250), and the rest are found by making each definition once and reading its model."""
+    global _by_model
+    model = getattr(resource, "model", None)
+    if not model:
+        return None
+    known = {e["definition"] for e in _all_definitions()}
+    if model in known:
+        return model
+    if _by_model is None:
+        _by_model = {}
+        for name in sorted(known):
+            try:
+                made = getattr(plr_resources, name)(name="probe")
+            except Exception:
+                continue
+            found = getattr(made, "model", None)
+            if found and found != name:
+                _by_model.setdefault(found, name)
+    return _by_model.get(model)
+
+
+def _entry_of(resource, empty_holders: bool = False) -> dict:
+    definition = _definition_of(resource)
+    if definition:
+        return {"name": resource.name, "type": definition}
+    data = resource.serialize()
+    if empty_holders:  # a carrier: what sits on it is listed as its children instead
+        for holder in data.get("children") or []:
+            holder["children"] = []
+    return {"name": resource.name, "serialized": data}
+
+
+def _rail_of(deck, carrier) -> Optional[int]:
+    """The rail a carrier sits on, by finding where PyLabRobot would put it on each rail."""
+    for n in range(1, (getattr(deck, "num_rails", None) or 0) + 1):
+        if hasattr(deck, "rails_to_location"):
+            at = deck.rails_to_location(n)
+        elif hasattr(deck, "_coordinate_for_rails"):
+            try:
+                at = deck._coordinate_for_rails(n, carrier)
+            except Exception:
+                return None
+        else:
+            return None
+        if abs(at.x - carrier.location.x) < 0.05 and abs(at.y - carrier.location.y) < 0.05:
+            return n
+    return None
+
+
+def from_pylabrobot(data: dict) -> dict:
+    """A worktable file from PyLabRobot's own description of a deck (`deck.save(...)`, or a whole
+    `LiquidHandler.save(...)`): each labware by its definition name where PyLabRobot recorded one,
+    otherwise kept exactly as serialized; slots, rails and carrier positions as they were."""
+    from pylabrobot.resources import Deck, ResourceHolder
+    if data.get("type") == "LiquidHandler":
+        data = next((c for c in data.get("children") or [] if c.get("category") == "deck"), None) or {}
+    try:
+        deck = Deck.deserialize(data)
+    except Exception as e:
+        raise ValueError(f"PyLabRobot could not read this deck ({type(e).__name__}: {e})") from None
+    kind = kind_of(deck)
+    native = {r.name for r in [make_deck(kind), *make_deck(kind).get_all_resources()]}
+    config: Dict[str, Any] = {"deck_type": kind, "resources": [], "liquids": []}
+    for child in deck.children:
+        if child.name in native and not (isinstance(child, ResourceHolder) and child.children):
+            continue  # the deck's own trash, waste block, wash station, empty slots
+        if isinstance(child, ResourceHolder):  # an Opentrons slot
+            if child.children and child.children[0].name not in native:
+                slot = int(str(child.name).rsplit("_", 1)[-1])
+                config["resources"].append({**_entry_of(child.children[0]), "slot": slot})
+            continue
+        if isinstance(child, Carrier):
+            entry = _entry_of(child, empty_holders=True)
+            rail = _rail_of(deck, child)
+            entry.update({"rails": rail} if rail else {"location": {"x": child.location.x, "y": child.location.y, "z": child.location.z}})
+            entry["children"] = [{**_entry_of(holder.children[0]), "site": i}
+                                 for i, holder in enumerate(child.children) if holder.children]
+            config["resources"].append(entry)
+            continue
+        config["resources"].append({**_entry_of(child),
+                                    "location": {"x": child.location.x, "y": child.location.y, "z": child.location.z}})
+    return config
+
+
+def read_layout(text: str) -> dict:
+    """A layout someone already has, as a worktable: this package's file (or a 0.1 layout), or
+    PyLabRobot's own (`deck.save`, `LiquidHandler.save`). Checked by building it."""
+    import json as _json
+    try:
+        data = _json.loads(text)
+    except ValueError as e:
+        raise ValueError(f"This is not a JSON layout ({e}).") from None
+    if not isinstance(data, dict):
+        raise ValueError("This is not a layout: expected a JSON object.")
+    if "deck_type" in data or "resources" in data:
+        config = {k: v for k, v in data.items() if k not in ("format", "other_worktables")}
+    elif data.get("type") and "children" in data:
+        config = from_pylabrobot(data)
+    elif data and all(isinstance(v, dict) for v in data.values()) \
+            and any(k in v for v in data.values() for k in ("rotation", "tip", "volume", "liquids")):
+        raise ValueError("This is a PyLabRobot state file (tips and volumes); import the layout file beside it.")
+    else:
+        raise ValueError("This is neither a worktable file nor a PyLabRobot deck file.")
+    if config.get("deck_type", DEFAULT_DECK) not in (*DECKS, "VantageDeck"):
+        raise ValueError(f"'{config.get('deck_type')}' is not a worktable this knows ({', '.join(DECKS)}).")
+    build_deck(config)  # every definition exists and everything fits, or say what does not
+    return config
