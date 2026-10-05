@@ -232,7 +232,12 @@ pip install plr-ivoryos
 ```
 
 Python 3.10 or newer, PyLabRobot 0.2.2 or newer but below 1.0: PyLabRobot 1.0 (in beta) renames
-labware and resources this package relies on, and supporting it is a later release. Or from source:
+labware and resources this package relies on, and supporting it is a later release.
+
+PyLabRobot installs each instrument's connection library only on request, and so does this package:
+`pip install "plr-ivoryos[usb]"` for a Hamilton STAR, Vantage or Tecan EVO, `[serial]` for serial
+instruments, `[hid]` for Inheco and Byonoy, `[ftdi]` for BioTek readers, `[opentrons]` for an OT-2,
+`[sila]` for SiLA devices. Without it, the instrument fails when it connects. Or from source:
 ```bash
 pip install .
 ```
