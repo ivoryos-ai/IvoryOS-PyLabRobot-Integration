@@ -5,26 +5,32 @@ nothing from IvoryOS:
 
 * Metadata in an `Annotated[...]` hint that has an `ivoryos_schema()` method. Its keys are added
   to that parameter's entry in the schema: `Labware("plate")` makes the argument a choice among
-  the plates on the worktable, `Wells("plate")` makes it positions picked on that plate, and
-  `PerWell("wells")` makes it one value per well.
+  the plates on the worktable, `Wells("plate")` makes it wells picked on a plate (the plate is
+  chosen in the same picker), and `PerWell("targets")` makes it one value per well.
 * Methods named `__ivoryos_labware__` and friends on the driver (see liquid_handler.py), which
   report the worktable. Dunder names, so they are never offered as steps.
 
 The original IvoryOS reads `Annotated[str, ...]` as `str`, so there these are plain text fields.
 
-A well selection is text: "A1", "A1:H1" (down a column), "A1:A12" (along a row), "A1:H3" (the
-rectangle, column by column), "all", a list of those, or several separated by commas. One
+Wells are written as PyLabRobot writes them, as text: `assay_plate[A1:H1]` is PyLabRobot's
+`assay_plate["A1:H1"]`, so one argument names the labware and its wells together, the way a
+PyLabRobot `Well` knows its plate. Several are separated by commas (`reservoir[A1], reservoir[A2]`),
+a bare name is every well, and a list of them is what a batch step receives for its rows.
+
+Inside the brackets: "A1", "A1:H1" (down a column), "A1:A12" (along a row), "A1:H3" (the
+rectangle, column by column), "all", or several separated by commas. One
 difference from PyLabRobot's own `plate["A1:B2"]` is deliberate: PyLabRobot reads a rectangle row
 by row (A1, A2, B1, B2), this reads it column by column (A1, B1, A2, B2), which is the order a
 multichannel head works in and the order the IvoryOS plate picker writes. A single column or row
-reads the same in both. IvoryOS NextGen checks selections with a copy of `expand_wells`
-(`ivoryos_edge.labware`); the two must agree.
+reads the same in both. IvoryOS NextGen checks wells with copies of `expand_wells` and `expand_references`
+(`ivoryos_edge.labware`); they must agree.
 """
 
 import re
-from typing import Any, Dict, Iterable, List, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
-# What a wells argument carries: "A1", "A1:H1", "A1:H1, A3", a list of those, or "all".
+# What a wells argument carries: "plate[A1]", "plate[A1:H1, A3]", "plate" (all of it), several
+# separated by commas, or a list of those (a batch step's rows).
 WellSelection = Union[str, List[str]]
 ALL = "all"
 
@@ -41,18 +47,18 @@ class Labware:
 
 
 class Wells:
-    """`Annotated[WellSelection, Wells("plate")]`: positions on the labware named by the argument
-    `plate` of the same call."""
+    """`Annotated[WellSelection, Wells("plate")]`: wells written with their labware,
+    `assay_plate[A1:H1]`. Categories narrow which labware ("plate", "tip_rack", ...)."""
 
-    def __init__(self, on: str):
-        self.on = on
+    def __init__(self, *categories: str):
+        self.categories = list(categories)
 
     def ivoryos_schema(self) -> dict:
-        return {"type": "wells", "wells": {"on": self.on}}
+        return {"type": "wells", "wells": {"labware": self.categories}}
 
 
 class PerWell:
-    """`Annotated[Union[float, List[float]], PerWell("wells")]`: one value for every well of that
+    """`Annotated[Union[float, List[float]], PerWell("targets")]`: one value for every well of that
     argument, or one per well in the same order."""
 
     def __init__(self, of: str):
@@ -106,4 +112,48 @@ def expand_wells(selection: Any, grid: List[List[str]]) -> List[str]:
         if token not in index:
             raise ValueError(f"'{token}' is not a position")
         out.append(token)
+    return out
+
+
+_REFERENCE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[([^\]]*)\])?\s*[,;]?\s*")
+_WELL_NAME = re.compile(r"[A-Za-z]{1,2}[0-9]{1,3}")
+
+
+def parse_references(value: Any) -> List[tuple]:
+    """`assay_plate[A1:H1], reservoir[A1]` (or a list of such) as [(labware, selection or None)].
+    A bare name (`assay_plate`) has no selection. Raises ValueError for anything else."""
+    items = value if isinstance(value, (list, tuple)) else [value]
+    out: List[tuple] = []
+    for item in items:
+        text = str(item if item is not None else "").strip()
+        position = 0
+        while position < len(text):
+            match = _REFERENCE.match(text, position)
+            if not match or match.end() == position:
+                raise ValueError(f"'{text}' is not written as labware[wells], e.g. assay_plate[A1:H1]")
+            out.append((match.group(1), match.group(2)))
+            position = match.end()
+    if not out:
+        raise ValueError("no wells were given")
+    return out
+
+
+def expand_references(value: Any, grids: Dict[str, List[List[str]]], kinds: Optional[Dict[str, str]] = None,
+                      categories: Iterable[str] = ()) -> List[tuple]:
+    """Every (labware, well) a value names, in order. `grids` is each labware's position names;
+    a bare name is all of them. Raises ValueError saying what is wrong, naming the labware."""
+    wanted = list(categories or ())
+    out: List[tuple] = []
+    for labware, selection in parse_references(value):
+        if labware not in grids:
+            hint = " (write wells with their labware, e.g. assay_plate[A1])" if _WELL_NAME.fullmatch(labware) else ""
+            raise ValueError(f"'{labware}' is not on this worktable{hint}; it has {', '.join(grids) or 'nothing'}")
+        kind = (kinds or {}).get(labware)
+        if wanted and kind and kind not in wanted:
+            raise ValueError(f"'{labware}' is a {kind.replace('_', ' ')}, not a {' or '.join(c.replace('_', ' ') for c in wanted)}")
+        try:
+            wells = expand_wells(ALL if selection is None else selection, grids[labware])
+        except ValueError as e:
+            raise ValueError(f"{e} on {labware}") from None
+        out.extend((labware, well) for well in wells)
     return out

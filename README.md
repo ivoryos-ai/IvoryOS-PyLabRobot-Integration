@@ -77,21 +77,30 @@ The connection opens on the first step, so a deck starts with the robot switched
 
 ## Steps
 
-Steps take labware names and well selections; volumes are µL, flow rates µL/s.
+The steps keep PyLabRobot's names and arguments. Where PyLabRobot takes `Well` objects, they take
+the same thing written as text: `assay_plate[A1:H1]` is PyLabRobot's `assay_plate["A1:H1"]`.
+Volumes are µL, flow rates µL/s.
 
-| Step | What it does |
-| :--- | :--- |
-| `transfer(source, source_wells, dest, dest_wells, vols, tip_rack, new_tip="always", ...)` | One-to-many, one-to-one or many-to-one, as many wells at a time as the head has channels |
-| `aspirate(plate, wells, vols, ...)` / `dispense(...)` | With the tips on the head, one channel per well; optional mix and blow-out |
-| `pick_up_tips(tip_rack, tip_spots="next")`, `return_tips()`, `discard_tips()`, `drop_tips(tip_rack, tip_spots)` | Tips |
-| `mix(plate, wells, vols, repetitions)` | Up and down in place |
-| `move_plate(plate, to)` | To another slot or carrier position (needs a gripper on a real robot) |
-| `load_liquid(plate, wells, liquid, vols)`, `read_volumes(plate, wells)`, `tips_left(tip_rack)` | What is where |
+| Step | PyLabRobot | What is added |
+| :--- | :--- | :--- |
+| `transfer(source, targets, source_vol, ratios, target_vols, aspiration_flow_rate, dispense_flow_rates, ...)` | Same arguments, same `source_vol` / `ratios` / `target_vols` rule | Uses one channel per target (PyLabRobot's uses one channel for all); `source` may give one well per target; `tip_rack` + `new_tip` fetch tips (without them, the tips on the head, as in PyLabRobot); `blow_out_air_volume`, `mix_after_*`. Returns what each target got. |
+| `aspirate(resources, vols, use_channels, flow_rates, blow_out_air_volume, ...)` / `dispense(...)` | Same | `mix_volume` / `mix_repetitions` / `mix_flow_rate` for PyLabRobot's `mix`; from one trough well, several `vols` use several channels |
+| `pick_up_tips(tip_spots, use_channels)`, `drop_tips(tip_spots, use_channels)`, `return_tips()`, `discard_tips()` | Same | A bare rack name (`tips_300`) picks the next unused tips |
+| `move_plate(plate, to)` | Same | `to` is a slot ("5") or carrier position ("plate_carrier-1") |
+| `mix(resources, vols, repetitions)`, `load_liquid(resources, liquid, vols)`, `read_volumes(resources)`, `tips_left(tip_rack)` | Not steps there | Up and down in place; what is where |
 
-A well selection is `A1`, `A1:H1` (down a column), `A1:A12` (along a row), `A1:H3` (a rectangle,
-**column by column**: PyLabRobot's own `plate["A1:B2"]` goes row by row, but column order is what a
-multichannel head works in), `all`, or several separated by commas. `vols` is one number or one
-per well (`"100, 50, 25"` works too).
+```python
+# PyLabRobot
+await lh.transfer(reservoir["A1"][0], plate["B1:C1"], source_vol=60, ratios=[2, 1])
+# plr-ivoryos (and an IvoryOS step)
+lh.transfer(source="reservoir[A1]", targets="assay_plate[B1:C1]", source_vol=60, ratios=[2, 1], tip_rack="tips_300")
+```
+
+Inside the brackets: `A1`, `A1:H1` (down a column), `A1:A12` (along a row), `A1:H3` (a
+rectangle, **column by column**: PyLabRobot's `plate["A1:B2"]` goes row by row, but column order
+is what a multichannel head works in), `all`, or several separated by commas. A bare name is the
+whole labware; several references are separated by commas (`p1[A1:H1], p2[A1]`). Per-well values
+are one number or one per well (`"100, 50, 25"` works too).
 
 ### In IvoryOS NextGen
 
@@ -99,8 +108,7 @@ The arguments are marked with `Annotated[...]` (`plr_ivoryos.wells`), and the wo
 through `__ivoryos_labware__()`. IvoryOS reads both by duck typing; this package imports nothing
 from it. From that, with no configuration:
 
-- labware arguments are dropdowns of what is on the worktable, and wells are picked on a drawing
-  of the plate;
+- wells are picked on a drawing of the plate, choosing the plate in the same picker;
 - a well that is not on the plate is refused before a run starts;
 - a **batch** step is given every row of its batch in one call: one spreadsheet row per sample,
   batch size 8, and each `transfer` moves a column of eight;
@@ -155,8 +163,8 @@ stay on the loop that opened it. Steps are therefore ordinary synchronous calls,
 ### What changed in 0.2
 `LiquidHandler` is an ordinary class (0.1 returned a new class per deck, so its steps could only
 be found by building one). The runtime Enum registry is gone: labware choices come from the
-worktable. Steps take `plate`/`wells`/`vols`/`tip_rack` (0.1: `plate_name`/`resources`/`vols`/
-`tip_rack_name`). `simulated=True` with no layout works again (0.1 placed two plates on one
+worktable. Steps take PyLabRobot's own argument names, with wells written `plate[A1:H1]` (0.1:
+`plate_name` + `resources`, `tip_rack_name` + `tip_spots`, and `transfer`'s own names). `simulated=True` with no layout works again (0.1 placed two plates on one
 spot). `Scale.read_weight` works with PyLabRobot 0.2.2.
 
 ---

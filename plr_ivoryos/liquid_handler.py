@@ -7,10 +7,11 @@ PyLabRobot already has what an IvoryOS deck should not rebuild: worktables for H
 Opentrons and Tecan robots, hundreds of plate, tip-rack and carrier definitions with their real
 geometry, tip and volume tracking, and a simulator. What it does not have is a call a form can
 fill in: `lh.aspirate(plate["A1:H1"], vols=[50] * 8)` takes live Python objects. This class is
-that layer and nothing more. Its steps take names and well selections:
+that layer and nothing more. Its steps keep PyLabRobot's names and arguments, with the wells
+written as text the same way (wells.py):
 
-    lh.transfer(source="reservoir", source_wells="A1", dest="assay_plate", dest_wells="A1:H3",
-                vols=100, tip_rack="tips_300")
+    lh.transfer(source="reservoir[A1]", targets="assay_plate[A1:H3]", target_vols=100,
+                tip_rack="tips_300")                  # PyLabRobot: lh.transfer(res["A1"][0], plate["A1:H3"], target_vols=[100]*24)
 
 The worktable is a file (worktable.py), so which robot it is and what sits where is
 configuration, never code or a command-line flag:
@@ -23,7 +24,7 @@ configuration, never code or a command-line flag:
 IvoryOS, since there is no file to write it to.
 
 In IvoryOS NextGen, the arguments are marked (wells.py): a labware argument lists what is on the
-worktable, a wells argument is picked on that plate, and a batch step is given every row of its
+worktable, a wells argument is picked on a drawing of the plate, and a batch step is given every row of its
 group in one call, so one row per sample and one call per column of eight are the same workflow.
 The worktable is reported through `__ivoryos_labware__`, which the Labware view draws and the
 safety guard checks wells against. The original IvoryOS shows these as text fields.
@@ -46,7 +47,7 @@ from pylabrobot.resources import (Carrier, Container, ItemizedResource, Plate, R
 
 from plr_ivoryos import worktable
 from plr_ivoryos.async_bridge import run_async
-from plr_ivoryos.wells import ALL, Labware, PerWell, Site, WellSelection, Wells, expand_wells
+from plr_ivoryos.wells import ALL, Labware, PerWell, Site, WellSelection, Wells, expand_references, parse_references
 
 LIQUID_CONTAINERS = ("plate", "reservoir", "tube_rack")
 # A liquid nobody named: the volume is tracked, what it is is not.
@@ -149,7 +150,9 @@ class LiquidHandler:
             if entry["labware"] not in self._labware_map():
                 print(f"Liquid '{entry['liquid']}' not loaded: {entry['labware']} is not on the worktable")
                 continue
-            self._load(entry["labware"], entry.get("wells", ALL), entry["liquid"], entry["volume_ul"])
+            wells = entry.get("wells", ALL)
+            wells = ", ".join(wells) if isinstance(wells, (list, tuple)) else wells
+            self._load(f"{entry['labware']}[{wells}]", entry["liquid"], entry["volume_ul"])
 
     async def _setup(self) -> None:
         if self._ready:
@@ -383,20 +386,21 @@ class LiquidHandler:
             raise ValueError(f"'{labware}' is not a {kind} on this worktable (it has: {', '.join(found) or 'nothing'})")
         return found[labware]
 
-    def _targets(self, labware: str, wells: WellSelection) -> List[tuple]:
-        """(labware, well, container) for each selected well, in visiting order."""
-        resource = self._resource(labware)
-        if isinstance(resource, TipRack):
-            raise ValueError(f"'{labware}' is a tip rack, not something that holds liquid")
-        try:
-            names = expand_wells(wells, _grid(resource))
-        except ValueError as e:
-            raise ValueError(f"{e} on {labware}") from None
-        if not names:
-            raise ValueError(f"No wells were given for {labware}")
-        if not isinstance(resource, ItemizedResource):
-            return [(labware, "A1", resource) for _ in names]
-        return [(labware, name, resource.get_item(name)) for name in names]
+    def _wells(self, value: WellSelection, categories=LIQUID_CONTAINERS) -> List[tuple]:
+        """(labware, well, container or tip spot) for every well `value` names (`plate[A1:H1]`,
+        wells.py), in order. Raises ValueError naming what is not on the worktable."""
+        found = self._labware_map()
+        pairs = expand_references(value, {name: _grid(r) for name, r in found.items()},
+                                  {name: _category(r) for name, r in found.items()}, categories)
+        out = []
+        for labware, well in pairs:
+            resource = found[labware]
+            out.append((labware, well, resource.get_item(well) if isinstance(resource, ItemizedResource) else resource))
+        return out
+
+    @staticmethod
+    def _reference(labware: str, well: str) -> str:
+        return f"{labware}[{well}]"
 
     @staticmethod
     def _per_well(value, count: int, what: str) -> List[float]:
@@ -415,32 +419,64 @@ class LiquidHandler:
         except (TypeError, ValueError):
             raise ValueError(f"{what} must be a number, or one number per well") from None
 
+    @staticmethod
+    def _channel_list(use_channels) -> Optional[List[int]]:
+        """`use_channels` as PyLabRobot takes it: a list of channel numbers, from 0. "0, 1, 2" too."""
+        if use_channels is None or use_channels == "":
+            return None
+        if isinstance(use_channels, str):
+            use_channels = [part for part in use_channels.replace("[", "").replace("]", "").split(",") if part.strip()]
+        values = list(use_channels) if isinstance(use_channels, (list, tuple)) else [use_channels]
+        try:
+            return [int(v) for v in values]
+        except (TypeError, ValueError):
+            raise ValueError("use_channels is a list of channel numbers, counted from 0") from None
+
     # --- tips -----------------------------------------------------------------------------------------
 
     def _mounted(self) -> List[int]:
         head = getattr(self._lh, "head", {}) or {}
         return [i for i in sorted(head) if head[i].has_tip]
 
-    def _channels_for(self, count: int) -> List[int]:
+    def _channels_for(self, count: int, use_channels: Optional[List[int]] = None) -> List[int]:
         mounted = self._mounted()
+        if use_channels is not None:
+            if len(use_channels) != count:
+                raise ValueError(f"use_channels names {len(use_channels)} channels for {count} wells")
+            empty = [c for c in use_channels if c not in mounted]
+            if empty:
+                raise ValueError(f"channel {empty[0]} has no tip on it")
+            return use_channels
         if count > len(mounted):
             raise ValueError(f"{count} wells need {count} tips on the head, and it has {len(mounted)}")
         return mounted[:count]
 
-    async def _pick_up(self, tip_rack: str, count: int, tips: WellSelection = "next") -> List[str]:
-        rack = self._resource(tip_rack, "tip rack")
-        if not isinstance(rack, TipRack):
-            raise ValueError(f"'{tip_rack}' is not a tip rack")
-        if isinstance(tips, str) and tips.strip().lower() == "next":
-            spots = [s for s in rack.get_all_items() if s.has_tip()][:count]
-            if len(spots) < count:
-                raise ValueError(f"{tip_rack} has {len(spots)} tips left and {count} are needed")
-        else:
-            spots = [rack.get_item(n) for n in expand_wells(tips, _grid(rack))]
-        names = [rack.get_child_identifier(s) for s in spots]
-        await self._lh.pick_up_tips(spots, use_channels=list(range(len(spots))))
-        await self._emit("pick_up_tips", tip_rack, names)
-        return names
+    async def _pick_up(self, tip_spots: WellSelection, count: int, use_channels: Optional[List[int]] = None) -> List[str]:
+        """Tips at `tip_spots` (`tips_300[A1:H1]`), or with a bare rack name (`tips_300`) the next
+        `count` unused ones in it."""
+        refs = parse_references(tip_spots)
+        spots = self._wells(tip_spots, ("tip_rack",))  # checks every name is a tip rack on the worktable
+        if len(refs) == 1 and refs[0][1] is None:
+            name = refs[0][0]
+            rack = self._resource(name, "tip rack")
+            left = [s for s in rack.get_all_items() if s.has_tip()][:count]
+            if len(left) < count:
+                raise ValueError(f"{name} has {len(left)} tips left and {count} are needed")
+            spots = [(name, rack.get_child_identifier(s), s) for s in left]
+        channels = use_channels if use_channels is not None else list(range(len(spots)))
+        if len(channels) != len(spots):
+            raise ValueError(f"use_channels names {len(channels)} channels for {len(spots)} tips")
+        await self._lh.pick_up_tips([spot for _, _, spot in spots], use_channels=channels)
+        for rack, wells in self._by_labware(spots).items():
+            await self._emit("pick_up_tips", rack, wells)
+        return [self._reference(rack, well) for rack, well, _ in spots]
+
+    @staticmethod
+    def _by_labware(triples: List[tuple]) -> Dict[str, List[str]]:
+        out: Dict[str, List[str]] = {}
+        for labware, well, _ in triples:
+            out.setdefault(labware, []).append(well)
+        return out
 
     async def _drop(self, how: str = "discard") -> None:
         if not self._mounted():
@@ -452,15 +488,15 @@ class LiquidHandler:
 
     # --- liquid ---------------------------------------------------------------------------------------
 
-    def _load(self, labware: str, wells: WellSelection, liquid: str, volume_ul) -> List[str]:
-        targets = self._targets(labware, wells)
-        volumes = self._per_well(volume_ul, len(targets), "volume")
+    def _load(self, resources: WellSelection, liquid: str, vols) -> List[tuple]:
+        targets = self._wells(resources)
+        volumes = self._per_well(vols, len(targets), "vols")
         with self._lock:
             for (name, well, container), volume in zip(targets, volumes):
                 container.tracker.set_volume(container.tracker.get_used_volume() + volume)
                 held = self._contents.setdefault((name, well), {})
                 held[str(liquid)] = held.get(str(liquid), 0.0) + volume
-        return [well for _, well, _ in targets]
+        return targets
 
     def _take(self, key: tuple, volume: float) -> Dict[str, float]:
         """What `volume` drawn from a well consists of, removed from the well's record."""
@@ -480,7 +516,7 @@ class LiquidHandler:
         return max(1, int(container.get_absolute_size_y() // CHANNEL_PITCH_MM) - 1)
 
     async def _liquid(self, action: str, targets: List[tuple], volumes: List[float], channels: List[int],
-                      flow_rates: Optional[List[float]] = None, blow_out_air_volume: Optional[float] = None,
+                      flow_rates: Optional[List[Optional[float]]] = None, blow_out_air_volume: Optional[float] = None,
                       mix: Optional[tuple] = None) -> None:
         """One aspirate or dispense across `channels`. Channels sharing a container go in as many at
         a time as fit side by side in it; the rest go together."""
@@ -524,10 +560,7 @@ class LiquidHandler:
                         moved = tip[liquid] * share
                         tip[liquid] -= moved
                         held[liquid] = held.get(liquid, 0.0) + moved
-        by_labware: Dict[str, List[str]] = {}
-        for name, well, _ in targets:
-            by_labware.setdefault(name, []).append(well)
-        for name, wells in by_labware.items():
+        for name, wells in self._by_labware(targets).items():
             await self._emit(action, name, wells)
 
     @staticmethod
@@ -537,117 +570,135 @@ class LiquidHandler:
         return (float(volume), int(repetitions), float(flow_rate) if flow_rate is not None else 100.0)
 
     # --- steps ------------------------------------------------------------------------------------------
+    # Named and shaped as PyLabRobot's LiquidHandler, with `plate[wells]` text where it takes Well
+    # objects. Extras PyLabRobot does not have are marked as such.
 
     def transfer(self,
-                 source: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                 source_wells: Annotated[WellSelection, Wells("source")],
-                 dest: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                 dest_wells: Annotated[WellSelection, Wells("dest")],
-                 vols: Annotated[Volumes, PerWell("dest_wells")],
-                 tip_rack: Annotated[str, Labware("tip_rack")],
-                 new_tip: Literal["always", "once", "never"] = "always",
+                 source: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
+                 targets: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
+                 source_vol: Optional[float] = None,
+                 ratios: Annotated[Optional[Volumes], PerWell("targets")] = None,
+                 target_vols: Annotated[Optional[Volumes], PerWell("targets")] = None,
                  aspiration_flow_rate: Optional[float] = None,
-                 dispense_flow_rate: Optional[float] = None,
+                 dispense_flow_rates: Annotated[Optional[Volumes], PerWell("targets")] = None,
+                 tip_rack: Annotated[Optional[str], Labware("tip_rack")] = None,
+                 new_tip: Literal["always", "once", "never"] = "always",
                  blow_out_air_volume: Optional[float] = None,
                  mix_after_volume: Optional[float] = None,
                  mix_after_repetitions: Optional[int] = None) -> Dict[str, float]:
-        """Move liquid from source wells to destination wells (µL), as many at a time as the head has channels.
+        """Transfer liquid from the source well to the target wells (µL), as PyLabRobot's transfer does.
 
-        One source well feeds every destination (a reservoir into a plate), or wells pair up one to
-        one, or many pool into one. `vols` is one number for all of them or one per destination;
-        a well given 0 is skipped. Tips come from the next unused ones in `tip_rack`: fresh for
-        every group of wells ("always"), one set for the whole step ("once"), or the ones already
-        on the head ("never"). Flow rates are µL/s. Returns the volume delivered to each
-        destination well.
+        `source_vol` is split between the targets (evenly, or by `ratios`), or `target_vols` gives
+        each target its own volume. Unlike PyLabRobot's, which uses one channel, this uses as many
+        channels as there are tips, one per target. Also beyond PyLabRobot: `source` may name one
+        well per target (pairs), and with `tip_rack` it fetches tips itself (`new_tip`: fresh for
+        every group of wells, once for the whole step, or never); without it, it uses the tips
+        already on the head, as PyLabRobot's does. Returns the volume delivered to each target.
         """
-        return run_async(self._transfer(source, source_wells, dest, dest_wells, vols, tip_rack, new_tip,
-                                        aspiration_flow_rate, dispense_flow_rate, blow_out_air_volume,
-                                        self._mix(mix_after_volume, mix_after_repetitions, dispense_flow_rate)))
+        return run_async(self._transfer(source, targets, source_vol, ratios, target_vols, aspiration_flow_rate,
+                                        dispense_flow_rates, tip_rack, new_tip, blow_out_air_volume,
+                                        self._mix(mix_after_volume, mix_after_repetitions, None)))
 
-    async def _transfer(self, source, source_wells, dest, dest_wells, vols, tip_rack, new_tip,
-                        aspiration_flow_rate, dispense_flow_rate, blow_out_air_volume, mix_after):
+    async def _transfer(self, source, targets, source_vol, ratios, target_vols, aspiration_flow_rate,
+                        dispense_flow_rates, tip_rack, new_tip, blow_out_air_volume, mix_after):
         await self._setup()
-        sources, dests = self._targets(source, source_wells), self._targets(dest, dest_wells)
-        count = max(len(sources), len(dests))
-        if len(sources) not in (1, count) or len(dests) not in (1, count):
-            raise ValueError(f"{len(sources)} source wells and {len(dests)} destination wells do not pair up: "
-                             "use one to many, many to one, or the same number of each")
-        sources, dests = sources * (count // len(sources)), dests * (count // len(dests))
-        volumes = self._per_well(vols, count, "vols")
-        pairs = [(s, d, v) for s, d, v in zip(sources, dests, volumes) if v > 0]
+        sources, dests = self._wells(source), self._wells(targets)
+        count = len(dests)
+        if len(sources) not in (1, count):
+            raise ValueError(f"{len(sources)} source wells for {count} targets: give one source, or one per target")
+        sources = sources * (count // len(sources))
+        # PyLabRobot's rule: target_vols, or source_vol split by ratios (evenly without them).
+        if target_vols is not None and target_vols != "":
+            if source_vol is not None or (ratios is not None and ratios != ""):
+                raise ValueError("Give target_vols, or source_vol (with ratios), not both")
+            volumes = self._per_well(target_vols, count, "target_vols")
+        elif source_vol is None:
+            raise ValueError("Give source_vol (split between the targets) or target_vols (one per target)")
+        else:
+            shares = self._per_well(ratios if ratios is not None and ratios != "" else 1, count, "ratios")
+            volumes = [float(source_vol) * r / sum(shares) for r in shares]
+        rates = None if dispense_flow_rates is None or dispense_flow_rates == "" else \
+            self._per_well(dispense_flow_rates, count, "dispense_flow_rates")
+        pairs = [(s, d, v, None if rates is None else rates[i])
+                 for i, (s, d, v) in enumerate(zip(sources, dests, volumes)) if v > 0]
+        own_tips = bool(tip_rack)
+        if not own_tips or new_tip == "never":
+            if not self._mounted():
+                raise ValueError("There are no tips on the head: pick some up first, or give tip_rack")
+        width = self._channel_count() if own_tips and new_tip != "never" else len(self._mounted())
         delivered: Dict[str, float] = {}
-        if new_tip == "never" and not self._mounted():
-            raise ValueError("new_tip is 'never' but no tips are on the head: pick some up first")
-        width = self._channel_count()
         for start in range(0, len(pairs), width):
             group = pairs[start:start + width]
-            if new_tip == "always" or (new_tip == "once" and not self._mounted()):
+            if own_tips and (new_tip == "always" or (new_tip == "once" and not self._mounted())):
                 await self._pick_up(tip_rack, len(group) if new_tip == "always" else min(width, len(pairs)))
             channels = self._channels_for(len(group))
-            amounts = [v for _, _, v in group]
-            await self._liquid("aspirate", [s for s, _, _ in group], amounts, channels,
-                               flow_rates=None if aspiration_flow_rate is None else [aspiration_flow_rate] * len(group))
-            await self._liquid("dispense", [d for _, d, _ in group], amounts, channels,
-                               flow_rates=None if dispense_flow_rate is None else [dispense_flow_rate] * len(group),
+            amounts = [v for _, _, v, _ in group]
+            await self._liquid("aspirate", [s for s, _, _, _ in group], amounts, channels,
+                               flow_rates=None if aspiration_flow_rate is None else [float(aspiration_flow_rate)] * len(group))
+            await self._liquid("dispense", [d for _, d, _, _ in group], amounts, channels,
+                               flow_rates=None if rates is None else [r for _, _, _, r in group],
                                blow_out_air_volume=blow_out_air_volume, mix=mix_after)
-            for (_, (_, well, _), volume) in group:
-                delivered[well] = round(delivered.get(well, 0.0) + volume, 3)
-            if new_tip == "always":
+            for (_, (labware, well, _), volume, _) in group:
+                key = self._reference(labware, well)
+                delivered[key] = round(delivered.get(key, 0.0) + volume, 3)
+            if own_tips and new_tip == "always":
                 await self._drop()
-        if new_tip == "once":
+        if own_tips and new_tip == "once":
             await self._drop()
         return delivered
 
     def aspirate(self,
-                 plate: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                 wells: Annotated[WellSelection, Wells("plate")],
-                 vols: Annotated[Volumes, PerWell("wells")] = 100.0,
-                 flow_rates: Annotated[Optional[Volumes], PerWell("wells")] = None,
+                 resources: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
+                 vols: Annotated[Volumes, PerWell("resources")],
+                 use_channels: Optional[List[int]] = None,
+                 flow_rates: Annotated[Optional[Volumes], PerWell("resources")] = None,
                  blow_out_air_volume: Optional[float] = None,
                  mix_volume: Optional[float] = None,
                  mix_repetitions: Optional[int] = None,
                  mix_flow_rate: Optional[float] = None) -> None:
-        """Draw liquid up (µL) with the tips on the head, one channel per well (or, from one trough
-        well, one channel per volume given). Mixes first if asked."""
-        run_async(self._one_way("aspirate", plate, wells, vols, flow_rates, blow_out_air_volume,
+        """Aspirate (µL) with the tips on the head, one channel per well, as PyLabRobot's aspirate.
+        From one trough well, several volumes mean several channels in it. Mixes first if asked."""
+        run_async(self._one_way("aspirate", resources, vols, use_channels, flow_rates, blow_out_air_volume,
                                 self._mix(mix_volume, mix_repetitions, mix_flow_rate)))
 
     def dispense(self,
-                 plate: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                 wells: Annotated[WellSelection, Wells("plate")],
-                 vols: Annotated[Volumes, PerWell("wells")] = 100.0,
-                 flow_rates: Annotated[Optional[Volumes], PerWell("wells")] = None,
+                 resources: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
+                 vols: Annotated[Volumes, PerWell("resources")],
+                 use_channels: Optional[List[int]] = None,
+                 flow_rates: Annotated[Optional[Volumes], PerWell("resources")] = None,
                  blow_out_air_volume: Optional[float] = None,
                  mix_volume: Optional[float] = None,
                  mix_repetitions: Optional[int] = None,
                  mix_flow_rate: Optional[float] = None) -> None:
-        """Dispense (µL) from the tips on the head, one channel per well. Mixes after if asked."""
-        run_async(self._one_way("dispense", plate, wells, vols, flow_rates, blow_out_air_volume,
+        """Dispense (µL) from the tips on the head, one channel per well, as PyLabRobot's dispense.
+        Mixes after if asked."""
+        run_async(self._one_way("dispense", resources, vols, use_channels, flow_rates, blow_out_air_volume,
                                 self._mix(mix_volume, mix_repetitions, mix_flow_rate)))
 
-    async def _one_way(self, action, plate, wells, vols, flow_rates, blow_out_air_volume, mix):
+    async def _one_way(self, action, resources, vols, use_channels, flow_rates, blow_out_air_volume, mix):
         await self._setup()
-        targets = self._targets(plate, wells)
+        targets = self._wells(resources)
         listed = self._per_well(vols, 0, "vols") if isinstance(vols, (list, tuple)) or (
             isinstance(vols, str) and "," in vols) else None
         if len(targets) == 1 and listed and len(listed) > 1:
-            # One well and a volume per channel: several tips in one trough well.
-            targets = targets * len(listed)
+            targets = targets * len(listed)  # one well, a volume per channel: several tips in one trough well
         count = len(targets)
-        await self._liquid(action, targets, self._per_well(vols, count, "vols"), self._channels_for(count),
-                           flow_rates=None if flow_rates is None else self._per_well(flow_rates, count, "flow_rates"),
+        await self._liquid(action, targets, self._per_well(vols, count, "vols"),
+                           self._channels_for(count, self._channel_list(use_channels)),
+                           flow_rates=None if flow_rates is None or flow_rates == "" else self._per_well(flow_rates, count, "flow_rates"),
                            blow_out_air_volume=blow_out_air_volume, mix=mix)
 
     def mix(self,
-            plate: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-            wells: Annotated[WellSelection, Wells("plate")],
+            resources: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
             vols: float = 50.0,
-            repetitions: int = 3) -> None:
-        """Draw up and dispense in the same wells, `repetitions` times, with the tips on the head."""
+            repetitions: int = 3,
+            use_channels: Optional[List[int]] = None) -> None:
+        """Draw up and dispense in the same wells, `repetitions` times, with the tips on the head.
+        (Not a PyLabRobot step: there mixing is the `mix` argument of aspirate and dispense.)"""
         async def go():
             await self._setup()
-            targets = self._targets(plate, wells)
-            channels = self._channels_for(len(targets))
+            targets = self._wells(resources)
+            channels = self._channels_for(len(targets), self._channel_list(use_channels))
             amounts = [float(vols)] * len(targets)
             for _ in range(max(1, int(repetitions))):
                 await self._liquid("aspirate", targets, amounts, channels)
@@ -655,38 +706,39 @@ class LiquidHandler:
         run_async(go())
 
     def pick_up_tips(self,
-                     tip_rack: Annotated[str, Labware("tip_rack")],
-                     tip_spots: Annotated[WellSelection, Wells("tip_rack")] = "next",
-                     count: int = 0) -> List[str]:
-        """Put tips on the head: the positions given, or with "next" the next unused ones (`count`
-        of them, or one per channel). Returns the positions taken."""
+                     tip_spots: Annotated[WellSelection, Wells("tip_rack")],
+                     use_channels: Optional[List[int]] = None) -> List[str]:
+        """Pick up tips, as PyLabRobot's pick_up_tips: `tips_300[A1:H1]`. A bare rack name
+        (`tips_300`) takes the next unused tips in it, one per channel (or per `use_channels`).
+        Returns the positions taken."""
         async def go():
             await self._setup()
-            return await self._pick_up(tip_rack, int(count) or self._channel_count(), tip_spots)
+            channels = self._channel_list(use_channels)
+            return await self._pick_up(tip_spots, len(channels) if channels else self._channel_count(), channels)
         return run_async(go())
 
     def drop_tips(self,
-                  tip_rack: Annotated[str, Labware("tip_rack")],
-                  tip_spots: Annotated[WellSelection, Wells("tip_rack")]) -> None:
-        """Put the tips on the head into these positions of a tip rack, one per channel."""
+                  tip_spots: Annotated[WellSelection, Wells("tip_rack")],
+                  use_channels: Optional[List[int]] = None) -> None:
+        """Put the tips on the head into these tip spots, one per channel, as PyLabRobot's drop_tips."""
         async def go():
             await self._setup()
-            rack = self._resource(tip_rack, "tip rack")
-            names = expand_wells(tip_spots, _grid(rack))
-            channels = self._channels_for(len(names))
-            await self._lh.drop_tips([rack.get_item(n) for n in names], use_channels=channels)
+            spots = self._wells(tip_spots, ("tip_rack",))
+            channels = self._channels_for(len(spots), self._channel_list(use_channels))
+            await self._lh.drop_tips([spot for _, _, spot in spots], use_channels=channels)
             with self._lock:
                 for channel in channels:
                     self._in_tips.pop(channel, None)
-            await self._emit("drop_tips", tip_rack, names)
+            for rack, wells in self._by_labware(spots).items():
+                await self._emit("drop_tips", rack, wells)
         run_async(go())
 
     def return_tips(self) -> None:
-        """Put the tips on the head back where they came from."""
+        """Put the tips on the head back where they came from, as PyLabRobot's return_tips."""
         run_async(self._setup_then(self._drop("return")))
 
     def discard_tips(self) -> None:
-        """Drop the tips on the head into the trash."""
+        """Drop the tips on the head into the trash, as PyLabRobot's discard_tips."""
         run_async(self._setup_then(self._drop("discard")))
 
     async def _setup_then(self, coro):
@@ -696,7 +748,8 @@ class LiquidHandler:
     def move_plate(self,
                    plate: Annotated[str, Labware("plate", "reservoir")],
                    to: Annotated[str, Site()]) -> None:
-        """Carry a plate to another place on the worktable (needs a gripper on a real robot)."""
+        """Carry a plate to another place on the worktable, as PyLabRobot's move_plate (needs a
+        gripper on a real robot)."""
         async def go():
             await self._setup()
             sites = self._site_map()
@@ -711,21 +764,20 @@ class LiquidHandler:
         run_async(go())
 
     def load_liquid(self,
-                    plate: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                    wells: Annotated[WellSelection, Wells("plate")],
+                    resources: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)],
                     liquid: str,
-                    vols: Annotated[Volumes, PerWell("wells")]) -> None:
+                    vols: Annotated[Volumes, PerWell("resources")]) -> None:
         """Record what a person put on the worktable: this liquid, this much (µL), in these wells.
-        Nothing moves."""
-        loaded = self._load(plate, wells, liquid, vols)
-        self._notify("load", plate, loaded)
+        Nothing moves. (Not a PyLabRobot step: there it is `well.tracker.set_volume`.)"""
+        loaded = self._load(resources, liquid, vols)
+        for labware, wells in self._by_labware(loaded).items():
+            self._notify("load", labware, wells)
 
-    def read_volumes(self,
-                     plate: Annotated[str, Labware(*LIQUID_CONTAINERS)],
-                     wells: Annotated[WellSelection, Wells("plate")] = ALL) -> Dict[str, float]:
-        """The volume tracked in each well (µL): what was loaded, plus and minus every transfer."""
-        return {well: round(container.tracker.get_used_volume(), 3)
-                for _, well, container in self._targets(plate, wells)}
+    def read_volumes(self, resources: Annotated[WellSelection, Wells(*LIQUID_CONTAINERS)]) -> Dict[str, float]:
+        """The volume tracked in each well (µL), by `plate[well]`: what was loaded, plus and minus
+        every transfer. (PyLabRobot: `well.tracker.get_used_volume()`.)"""
+        return {self._reference(labware, well): round(container.tracker.get_used_volume(), 3)
+                for labware, well, container in self._wells(resources)}
 
     def tips_left(self, tip_rack: Annotated[str, Labware("tip_rack")]) -> int:
         """How many unused tips the rack still has."""
