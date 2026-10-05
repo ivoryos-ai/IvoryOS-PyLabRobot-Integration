@@ -231,7 +231,8 @@ real robot.
 pip install plr-ivoryos
 ```
 
-Python 3.10 or newer, PyLabRobot 0.2.2 or newer. Or from source:
+Python 3.10 or newer, PyLabRobot 0.2.2 or newer but below 1.0: PyLabRobot 1.0 (in beta) renames
+labware and resources this package relies on, and supporting it is a later release. Or from source:
 ```bash
 pip install .
 ```
