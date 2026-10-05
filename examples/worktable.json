@@ -1,0 +1,45 @@
+{
+  "format": "plr-ivoryos-worktable/1",
+  "deck_type": "OTDeck",
+  "resources": [
+    {
+      "name": "tips_300",
+      "type": "opentrons_96_tiprack_300ul",
+      "slot": 1
+    },
+    {
+      "name": "tips_300_b",
+      "type": "opentrons_96_tiprack_300ul",
+      "slot": 4
+    },
+    {
+      "name": "reservoir",
+      "type": "nest_12_troughplate_15000uL_Vb",
+      "slot": 2
+    },
+    {
+      "name": "assay_plate",
+      "type": "cor_96_wellplate_360uL_Fb",
+      "slot": 5
+    },
+    {
+      "name": "sample_plate",
+      "type": "cor_96_wellplate_360uL_Fb",
+      "slot": 6
+    }
+  ],
+  "liquids": [
+    {
+      "labware": "reservoir",
+      "wells": "A1",
+      "liquid": "buffer",
+      "volume_ul": 14000
+    },
+    {
+      "labware": "reservoir",
+      "wells": "A2",
+      "liquid": "dye",
+      "volume_ul": 9000
+    }
+  ]
+}

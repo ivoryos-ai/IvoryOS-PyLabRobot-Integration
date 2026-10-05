@@ -16,76 +16,99 @@
 
 ## Quick Start (Simulation)
 
-Develop and test your workflows with zero hardware. `plr-ivoryos` provides a built-in "headless" simulation mode that requires no configuration.
+Develop and test workflows with no hardware: PyLabRobot's simulator tracks every tip and every
+microlitre.
 
 ```python
 from plr_ivoryos import LiquidHandler, Scale
 
-# Start with a default simulated deck and balance
-lh = LiquidHandler(simulated=True)
+lh = LiquidHandler(simulated=True, deck_json="worktable.json")   # written on the first edit
 scale = Scale(simulated=True)
 
 if __name__ == "__main__":
-    import ivoryos
-    ivoryos.run(__name__)
+    import ivoryos_edge            # IvoryOS NextGen; `import ivoryos; ivoryos.run(__name__)` for the original
+    ivoryos_edge.run(__name__)
 ```
+
+Every step can also be called from plain Python: `lh.transfer(...)` blocks until it is done.
 
 ---
 
-## Key Features
+## The worktable is a file
 
-### 1. Native PLR Naming
-Classes in `plr-ivoryos` use the exact same names as the original PyLabRobot classes (`LiquidHandler`, `Scale`, `Pump`, etc.). This makes the integration intuitive for PLR users while ensuring full compatibility with the IvoryOS ecosystem.
+Which robot it is and what sits where is configuration, not code, so one script serves every
+robot and the IvoryOS Hub can ship the file with an install:
 
-### 2. Smart Simulation Mode
-Setting `simulated=True` on any device wrapper automatically selects a suitable mock backend. For the `LiquidHandler`, it also sets up a default Hamilton STARLet deck, allowing you to see interactive plate and well dropdowns in the IvoryOS UI immediately.
+```json
+{
+  "deck_type": "OTDeck",
+  "resources": [
+    {"name": "tips_300", "type": "opentrons_96_tiprack_300ul", "slot": 1},
+    {"name": "reservoir", "type": "nest_12_troughplate_15000uL_Vb", "slot": 2},
+    {"name": "assay_plate", "type": "cor_96_wellplate_360uL_Fb", "slot": 5},
+    {"name": "plate_carrier", "type": "PLT_CAR_L5AC_A00", "rails": 15,
+     "children": [{"name": "sample_plate", "type": "cor_96_wellplate_360uL_Fb", "site": 0}]}
+  ],
+  "liquids": [{"labware": "reservoir", "wells": "A1", "liquid": "buffer", "volume_ul": 14000}]
+}
+```
 
-### 3. Dynamic Enum Introspection
-`plr-ivoryos` inspects your hardware deck at runtime to generate dynamic Python Enums. 
-- **Plate Selection**: Dropdowns are automatically populated with the specific plates on your deck.
-- **Well Selection**: Intelligent `A1..H12` dropdowns for all aspiration and dispense commands.
+- `deck_type`: `OTDeck`, `STARLetDeck`, `STARDeck`, `EVO100Deck`, `EVO150Deck`, `EVO200Deck`.
+- `type`: any labware definition in `pylabrobot.resources`, placed by `slot` (Opentrons),
+  `rails` (Hamilton, Tecan) or `location` ({x, y, z} mm). Carriers list what they hold in
+  `children`, by `site`.
+- `liquids`: what a person put on the worktable before the run. With tracking on (the default),
+  an aspirate from a well nobody filled is refused; fill it here or with a `load_liquid` step.
+
+Layout files written for 0.1 still load. In IvoryOS NextGen the Labware panel edits this file:
+place or remove labware from PyLabRobot's catalogue, and on the simulator switch the robot
+(OT-2, STARlet, STAR, EVO) without touching the script.
+
+A real robot is the same line with its backend:
+
+```python
+from pylabrobot.liquid_handling.backends import OpentronsOT2Backend
+lh = LiquidHandler(backend=OpentronsOT2Backend(host="10.0.0.5"), deck_json="worktable.json")
+```
+
+The connection opens on the first step, so a deck starts with the robot switched off.
 
 ---
 
-## Advanced Usage
+## Steps
 
-### Custom Backends
-You can pass any standard PyLabRobot backend to the wrappers. This is how you connect to real hardware or specialized simulators.
+Steps take labware names and well selections; volumes are µL, flow rates µL/s.
 
-```python
-from plr_ivoryos import Scale
-from pylabrobot.scales.mettler_toledo_backend import MettlerToledoWXS205SDU
+| Step | What it does |
+| :--- | :--- |
+| `transfer(source, source_wells, dest, dest_wells, vols, tip_rack, new_tip="always", ...)` | One-to-many, one-to-one or many-to-one, as many wells at a time as the head has channels |
+| `aspirate(plate, wells, vols, ...)` / `dispense(...)` | With the tips on the head, one channel per well; optional mix and blow-out |
+| `pick_up_tips(tip_rack, tip_spots="next")`, `return_tips()`, `discard_tips()`, `drop_tips(tip_rack, tip_spots)` | Tips |
+| `mix(plate, wells, vols, repetitions)` | Up and down in place |
+| `move_plate(plate, to)` | To another slot or carrier position (needs a gripper on a real robot) |
+| `load_liquid(plate, wells, liquid, vols)`, `read_volumes(plate, wells)`, `tips_left(tip_rack)` | What is where |
 
-# Connect to a real Mettler Toledo balance
-scale = Scale(backend=MettlerToledoWXS205SDU(port="COM3"))
-```
+A well selection is `A1`, `A1:H1` (down a column), `A1:A12` (along a row), `A1:H3` (a rectangle,
+**column by column**: PyLabRobot's own `plate["A1:B2"]` goes row by row, but column order is what a
+multichannel head works in), `all`, or several separated by commas. `vols` is one number or one
+per well (`"100, 50, 25"` works too).
 
-### Visual Simulator
-To use PyLabRobot's browser-based simulator, simply use `lh.start_visualizer()`:
+### In IvoryOS NextGen
 
-```python
-from plr_ivoryos import LiquidHandler
-from pylabrobot.liquid_handling.backends import ChatterBoxBackend
+The arguments are marked with `Annotated[...]` (`plr_ivoryos.wells`), and the worktable is reported
+through `__ivoryos_labware__()`. IvoryOS reads both by duck typing; this package imports nothing
+from it. From that, with no configuration:
 
-lh = LiquidHandler(backend=ChatterBoxBackend(), deck_json="my_layout.json"
-)
-lh.start_visualizer(open_browser=False)
-```
+- labware arguments are dropdowns of what is on the worktable, and wells are picked on a drawing
+  of the plate;
+- a well that is not on the plate is refused before a run starts;
+- a **batch** step is given every row of its batch in one call: one spreadsheet row per sample,
+  batch size 8, and each `transfer` moves a column of eight;
+- the Labware panel shows the worktable live: what each well holds, which tips are left, and the
+  wells a step is working on.
 
-### Multichannel & Advanced Controls
+The original IvoryOS shows these arguments as text fields.
 
-The `LiquidHandler` seamlessly supports PyLabRobot's advanced liquid handling capabilities directly from the IvoryOS interface:
-
-- **Slicing**: You can enter well slices (e.g., `"A1:A8"`, `"A1:C1"`) to perform multichannel operations.
-- **Dynamic List Parsing**: For parameters like `vols` or `flow_rates`, you can enter a single number (which automatically broadcasts to all selected wells) or a comma-separated list of numbers (e.g., `"100, 50, 200"`) for distinct volumes per channel.
-- **Native Pro Controls**: Form inputs for `mix_volume`, `mix_repetitions`, `blow_out_air_volume`, and more are provided out of the box, allowing granular pipetting control without writing any Python.
-
-```python
-from plr_ivoryos import LiquidHandler
-from pylabrobot.liquid_handling.backends import ChatterBoxBackend
-
-lh = LiquidHandler(backend=ChatterBoxBackend())
-```
 ---
 
 ## Supported Devices
@@ -124,10 +147,17 @@ pip install -r requirements.txt
 ## How it Works
 
 ### Async Bridge
-PyLabRobot is built on `asyncio`. `plr-ivoryos` manages a dedicated background thread running a persistent event loop. All commands are safely bridged from the IvoryOS script-runner thread to the PLR loop, ensuring your UI stays responsive during long hardware operations.
+PyLabRobot is built on `asyncio`. `plr-ivoryos` keeps one event loop on a background thread for
+the life of the process, and every step runs there: a robot connection opened in `setup()` has to
+stay on the loop that opened it. Steps are therefore ordinary synchronous calls, from IvoryOS
+(either version) or from plain Python.
 
-### Runtime Registry
-Runtime-generated Enums are registered in `plr_ivoryos._runtime_enums`. IvoryOS introspects these at startup to build the interactive forms and dropdowns seen in the Control Panel.
+### What changed in 0.2
+`LiquidHandler` is an ordinary class (0.1 returned a new class per deck, so its steps could only
+be found by building one). The runtime Enum registry is gone: labware choices come from the
+worktable. Steps take `plate`/`wells`/`vols`/`tip_rack` (0.1: `plate_name`/`resources`/`vols`/
+`tip_rack_name`). `simulated=True` with no layout works again (0.1 placed two plates on one
+spot). `Scale.read_weight` works with PyLabRobot 0.2.2.
 
 ---
 

@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plr-ivoryos"
-version = "0.1.1"
+version = "0.2.0"
 description = "IvoryOS-compatible wrappers for PyLabRobot devices"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "IvoryOS Contributors"}
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 dependencies = [
-    "pylabrobot>=0.2.0",
+    "pylabrobot>=0.2.2",
 ]
 
 [project.optional-dependencies]
