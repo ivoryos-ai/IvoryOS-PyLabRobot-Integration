@@ -119,7 +119,8 @@ def test_the_worktable_is_reported_from_the_file(lh):
     assert len(plate["grid"]) == 8 and plate["grid"][7][11] == "H12" and len(plate["spots"]) == 96
     assert layout["labware"]["reservoir"]["category"] == "reservoir"
     assert set(layout["labware"]) == {"tips_300", "reservoir", "assay_plate"}, "the trash is not a place to pipette"
-    assert [f["category"] for f in layout["fixtures"]] == ["trash"] and len(layout["sites"]) == 12
+    assert [f["category"] for f in layout["fixtures"]] == ["trash"]
+    assert [s["label"] for s in layout["sites"]] == [str(n) for n in range(1, 12)], "slot 12 holds the trash"
     state = lh.__ivoryos_labware_state__()
     assert state["labware"]["reservoir"]["A2"] == {"volume_ul": 5000.0, "liquids": {"dye": 5000.0}}
 
@@ -219,7 +220,7 @@ def test_a_hamilton_worktable_puts_labware_on_carriers(tmp_path, capsys):
     assert {f["name"] for f in layout["fixtures"] if f["category"] == "carrier"} == {"tip_carrier", "plate_carrier"}
     # The same names on every robot's starter, so one workflow runs on either.
     assert star.transfer(source="reservoir[A1]", targets="assay_plate[A1:H1]", target_vols=50,
-                         tip_rack="tips_300") == {f"assay_plate[{r}1]": 50.0 for r in "ABCDEFGH"}
+                         tip_rack="tips") == {f"assay_plate[{r}1]": 50.0 for r in "ABCDEFGH"}
 
 
 def test_a_layout_written_for_0_1_still_loads(capsys):
@@ -229,7 +230,7 @@ def test_a_layout_written_for_0_1_still_loads(capsys):
 
 def test_simulated_with_no_file_starts_from_a_working_worktable(capsys):
     lh = LiquidHandler(simulated=True)
-    assert {"tips_300", "reservoir", "assay_plate"} <= set(lh.__ivoryos_labware__()["labware"])
+    assert {"tips", "reservoir", "assay_plate"} <= set(lh.__ivoryos_labware__()["labware"])
     assert lh.__ivoryos_labware_catalog__() == {"labware": [], "decks": [], "deck": "STARLetDeck"}, \
         "no file to save to, so nothing to edit"
 
@@ -262,6 +263,8 @@ def test_the_worktable_is_edited_and_saved_and_used_next_time(tmp_path, capsys):
         ({"site": "7", "definition": "cor_96_wellplate_360uL_Fb", "name": "plate_2"}, "already called 'plate_2'"),
         ({"site": "7", "definition": "cor_96_wellplate_360uL_Fb", "name": "my plate"}, "starts with a letter"),
         ({"site": "7", "definition": "no_such_plate", "name": "plate_3"}, "not a deck or labware definition"),
+        ({"site": "7", "definition": "PLT_CAR_L5AC_A00"}, "is a carrier: it goes on the rails"),
+        ({"rails": 3, "definition": "PLT_CAR_L5AC_A00"}, "slots, not rails"),
         ({"site": "99", "definition": "cor_96_wellplate_360uL_Fb", "name": "plate_3"}, "not a place"),
     ]:
         with pytest.raises(ValueError, match=why):
@@ -292,14 +295,125 @@ def test_the_simulator_switches_robot_from_configuration_not_a_flag(tmp_path, ca
     path = write(tmp_path, OT2)
     lh = LiquidHandler(simulated=True, deck_json=path)
     lh.transfer(source="reservoir[A1]", targets="assay_plate[A1]", target_vols=10, tip_rack="tips_300")
-    lh.__ivoryos_labware_edit__("deck", deck="STARLetDeck")
+    lh.__ivoryos_labware_edit__("place", site="9", definition="cor_96_wellplate_360uL_Fb")
+    assert lh.__ivoryos_labware_edit__("deck", deck="STARLetDeck") == {"name": "STARLetDeck", "restart": True}
     assert lh.__ivoryos_labware__()["deck"]["kind"] == "STARLetDeck"
     assert lh.read_volumes("assay_plate[A1]") == {"assay_plate[A1]": 0}, "a new worktable starts clean"
     assert lh.transfer(source="reservoir[A1]", targets="assay_plate[A1]", target_vols=10,
-                       tip_rack="tips_300") == {"assay_plate[A1]": 10.0}
+                       tip_rack="tips") == {"assay_plate[A1]": 10.0}
     assert LiquidHandler(simulated=True, deck_json=path).__ivoryos_labware__()["deck"]["kind"] == "STARLetDeck"
+    # Each robot keeps its worktable: back on the OT-2, what was placed there is still there.
+    lh.__ivoryos_labware_edit__("deck", deck="OTDeck")
+    assert "plate_1" in lh.__ivoryos_labware__()["labware"]
+    assert list(json.loads(open(path).read())["other_worktables"]) == ["STARLetDeck"]
     with pytest.raises(ValueError, match="not a robot"):
         lh.__ivoryos_labware_edit__("deck", deck="VantageDeck")
+
+
+@pytest.mark.parametrize("kind", ["STARDeck", "EVO100Deck", "EVO150Deck", "EVO200Deck"])
+def test_every_robot_starts_from_a_worktable_the_same_workflow_runs_on(kind, tmp_path, capsys):
+    lh = LiquidHandler(simulated=True, deck_json=write(tmp_path, worktable.starter(kind)))
+    layout = lh.__ivoryos_labware__()
+    assert layout["deck"]["kind"] == kind and len(layout["deck"]["rails"]) == layout["deck"]["rails"][-1]["rail"]
+    # The same names on every robot, so the same step runs on each.
+    assert lh.transfer(source="reservoir[A1]", targets="assay_plate[A1:H1]", target_vols=20, tip_rack="tips") == \
+        {f"assay_plate[{r}1]": 20.0 for r in "ABCDEFGH"}
+    # Positions holding a trash (a Tecan wash station's troughs, its tip carrier's waste) are not places.
+    assert not any(s["holds"] and "wash" in s["holds"] for s in layout["sites"])
+    assert all(s["label"] != "tip_carrier-3" for s in layout["sites"]) if kind.startswith("EVO") else True
+
+
+def test_the_catalogue_is_the_robots_own(capsys):
+    def offered(kind):
+        return {e["definition"]: e["category"] for e in worktable.catalog(kind)}
+
+    ot, star, evo = offered("OTDeck"), offered("STARLetDeck"), offered("EVO150Deck")
+    assert "carrier" not in ot.values(), "an OT-2 has slots, not rails"
+    assert star["PLT_CAR_L5AC_A00"] == "carrier" and "MP_3Pos" not in star
+    assert evo["MP_3Pos"] == "carrier" and "PLT_CAR_L5AC_A00" not in evo
+    assert "opentrons_96_tiprack_300ul" in ot and "opentrons_96_tiprack_300ul" not in star
+    assert "hamilton_96_tiprack_300uL_filter" in star and "hamilton_96_tiprack_300uL_filter" not in evo
+    assert "DiTi_200ul_LiHa" in evo and "DiTi_200ul_LiHa" not in ot
+    assert all("cor_96_wellplate_360uL_Fb" in c for c in (ot, star, evo)), "plates fit any robot"
+
+
+def test_carriers_go_on_rails_and_labware_moves_renames_and_is_filled(tmp_path, capsys):
+    path = write(tmp_path, {"deck_type": "STARLetDeck", "resources": []})
+    lh = LiquidHandler(simulated=True, deck_json=path)
+    edit = lh.__ivoryos_labware_edit__
+    assert edit("place", definition="PLT_CAR_L5AC_A00", rails=20) == {"name": "carrier_1", "restart": True}
+    with pytest.raises(ValueError, match="does not fit at rail 21"):
+        edit("place", definition="PLT_CAR_L5AC_A00", rails=21)
+    with pytest.raises(ValueError, match="Rails run from 1 to 32"):
+        edit("place", definition="PLT_CAR_L5AC_A00", rails=40)
+    assert edit("place", definition="cor_96_wellplate_360uL_Fb", site="carrier_1-0")["name"] == "plate_1"
+    edit("move", name="plate_1", site="carrier_1-3")
+    edit("move", name="carrier_1", rails=8)
+    layout = lh.__ivoryos_labware__()
+    assert layout["labware"]["plate_1"]["site"] == "carrier_1-3" and layout["labware"]["plate_1"]["carrier"] == "carrier_1"
+    assert next(f for f in layout["fixtures"] if f["name"] == "carrier_1")["rails"] == 8
+    edit("rename", name="plate_1", to="dilutions")
+
+    # What wells hold is set, replaced and emptied the same way; it applies at once, no restart.
+    assert edit("liquid", labware="dilutions", wells=["A1", "B1", "C1"], liquid="water", volume_ul=100) == \
+        {"name": "dilutions", "restart": False}
+    edit("liquid", labware="dilutions", wells="B1", liquid="dye", volume_ul=50)
+    edit("liquid", labware="dilutions", wells="C1", liquid="", volume_ul=0)
+    with pytest.raises(ValueError, match="holds at most 360"):
+        edit("liquid", labware="dilutions", wells="A2", liquid="water", volume_ul=999)
+    assert lh.read_volumes("dilutions[A1:C1]") == {"dilutions[A1]": 100.0, "dilutions[B1]": 50.0, "dilutions[C1]": 0.0}
+    assert lh.__ivoryos_labware_state__()["labware"]["dilutions"]["B1"]["liquids"] == {"dye": 50.0}
+
+    saved = json.loads(open(path).read())
+    assert saved["resources"] == [{"name": "carrier_1", "type": "PLT_CAR_L5AC_A00", "rails": 8, "children": [
+        {"name": "dilutions", "type": "cor_96_wellplate_360uL_Fb", "site": 3}]}]
+    assert saved["liquids"] == [{"labware": "dilutions", "wells": "A1", "liquid": "water", "volume_ul": 100.0},
+                                {"labware": "dilutions", "wells": "B1", "liquid": "dye", "volume_ul": 50.0}]
+    again = LiquidHandler(simulated=True, deck_json=path)
+    assert again.read_volumes("dilutions[A1:C1]") == {"dilutions[A1]": 100.0, "dilutions[B1]": 50.0, "dilutions[C1]": 0.0}
+    again.__ivoryos_labware_edit__("remove", name="carrier_1")
+    assert json.loads(open(path).read()) | {} and json.loads(open(path).read())["liquids"] == [], \
+        "a carrier takes what is on it, and their liquids, with it"
+
+
+def test_the_labware_view_serves_follows_and_changes_the_worktable(lh, monkeypatch):
+    pytest.importorskip("ivoryos_edge")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from plr_ivoryos import labware_view
+
+    class Reader:  # shares the handler's worktable; must not be drawn as a second one
+        def __ivoryos_labware__(self):
+            return {"labware": lh.__ivoryos_labware__()["labware"]}
+
+    published = []
+    monkeypatch.setattr(labware_view.plugin, "instruments", {"lh": lh, "reader": Reader(), "other": object()})
+    monkeypatch.setattr(labware_view.plugin, "publish", published.append)
+    assert list(labware_view.layout()["worktables"]) == ["lh"]
+    assert labware_view.state()["worktables"]["lh"]["labware"]["reservoir"]["A2"]["liquids"] == {"dye": 5000.0}
+
+    labware_view._start(labware_view.plugin.instruments)
+    lh.load_liquid("assay_plate[A1:B1]", "sample", 50)
+    assert published[-1]["event"]["action"] == "load" and not published[-1]["relayout"]
+    lh.move_plate("assay_plate", "9")
+    assert published[-1]["relayout"] is True
+
+    page = FastAPI()
+    page.include_router(labware_view.plugin.router)
+    with TestClient(page) as client:
+        catalog = client.get("/api/catalog").json()["worktables"]["lh"]
+        assert catalog["deck"] == "OTDeck" and "EVO150Deck" in [d["kind"] for d in catalog["decks"]]
+        refused = client.post("/api/edit", json={"worktable": "lh", "action": "place", "site": "2",
+                                                 "definition": "cor_96_wellplate_360uL_Fb"})
+        assert refused.status_code == 400 and "already holds reservoir" in refused.json()["error"]
+        filled = client.post("/api/edit", json={"worktable": "lh", "action": "liquid", "labware": "assay_plate",
+                                                "wells": ["C1"], "liquid": "buffer", "volume_ul": 80}).json()
+        assert filled["restart_needed"] is False
+        assert filled["state"]["worktables"]["lh"]["labware"]["assay_plate"]["C1"]["volume_ul"] == 80
+        switched = client.post("/api/edit", json={"worktable": "lh", "action": "deck", "deck": "EVO150Deck"}).json()
+        assert switched["restart_needed"] and switched["layout"]["worktables"]["lh"]["deck"]["kind"] == "EVO150Deck"
+        assert switched["catalog"]["lh"]["deck"] == "EVO150Deck"
+        assert client.get("/index.html").status_code in (200, 404)  # the page is mounted by the edge, not this router
 
 
 def test_a_real_robot_or_a_deck_built_in_code_is_not_rearranged_from_ivoryos(tmp_path, capsys):

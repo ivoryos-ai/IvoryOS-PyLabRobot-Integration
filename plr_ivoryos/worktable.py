@@ -19,8 +19,13 @@ command-line flag:
   `slot` (Opentrons), `rails` (Hamilton, Tecan) or `location` ({x, y, z} in mm, as in 0.1).
   A carrier lists what it holds in `children`, each with the `site` it sits on.
 - `liquids` is what a person put on the worktable before the run.
+- A `{"name": "trash", "type": "Trash", "site": 3}` child is a trash in a carrier position (a Tecan
+  tip carrier's waste): PyLabRobot discards tips into the resource called "trash".
+- `other_worktables` keeps, per robot, the worktable it had before the robot was switched, so
+  switching back loses nothing.
 
-IvoryOS's Labware view edits this file (place, remove, change robot) through the LiquidHandler.
+IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, change robot)
+through the LiquidHandler.
 """
 
 import copy
@@ -31,7 +36,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import pylabrobot.resources as plr_resources
-from pylabrobot.resources import Carrier, Coordinate
+from pylabrobot.resources import Carrier, Coordinate, Trash
 
 FORMAT = "plr-ivoryos-worktable/1"
 DEFAULT_DECK = "STARLetDeck"
@@ -66,15 +71,23 @@ def resolve(name: str):
     raise ValueError(f"'{name}' is not a deck or labware definition in pylabrobot.resources.{hint}")
 
 
-def make(definition: str, name: str):
+def make(definition: str, name: str, size=None):
+    """A labware, carrier or trash by its PyLabRobot definition name. "Trash" is the one that is
+    not a ready-made definition: it takes the size of where it goes."""
+    if definition == "Trash":
+        x, y, z = (list(size) + [0, 0, 0])[:3] if size else (100, 100, 0)
+        return Trash(name=name, size_x=x, size_y=y, size_z=z)
     return resolve(definition)(name=name)
 
 
 def _place(deck, entry: dict) -> None:
-    resource = make(entry["type"], entry["name"])
+    resource = make(entry["type"], entry["name"], entry.get("size"))
     if isinstance(resource, Carrier):
         for child in entry.get("children") or []:
-            resource.assign_resource_to_site(make(child["type"], child["name"]), spot=int(child["site"]))
+            site = int(child["site"])
+            holder = resource.children[site]
+            size = (holder.get_size_x(), holder.get_size_y(), 0)
+            resource.assign_resource_to_site(make(child["type"], child["name"], size), spot=site)
     elif entry.get("children"):
         for child in entry["children"]:
             at = child.get("location") or {}
@@ -97,6 +110,22 @@ def build_deck(config: dict):
     return deck
 
 
+# Millimetres between rails, and where rail 1 is (PyLabRobot: HamiltonSTARDeck.rails_to_location,
+# TecanDeck._coordinate_for_rails before a carrier's own offset).
+_RAIL_PITCH = {"HamiltonSTARDeck": 22.5, "TecanDeck": 25.0}
+
+
+def rails_of(deck) -> List[Dict[str, float]]:
+    """Where each rail of a rail-based worktable is, `[{"rail", "x"}]`; empty for a deck of slots."""
+    count = getattr(deck, "num_rails", None)
+    if not count:
+        return []
+    if hasattr(deck, "rails_to_location"):
+        return [{"rail": n, "x": round(deck.rails_to_location(n).x, 2)} for n in range(1, count + 1)]
+    pitch = _RAIL_PITCH.get(type(deck).__name__, 25.0)
+    return [{"rail": n, "x": round(100 + (n - 1) * pitch, 2)} for n in range(1, count + 1)]
+
+
 def load(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -108,6 +137,17 @@ def save(path: str, config: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(body, f, indent=2)
         f.write("\n")
+
+
+def find(config: dict, name: str):
+    """(the entry called `name`, the list it is in, the carrier entry holding it or None)."""
+    for entry in config.get("resources") or []:
+        if entry.get("name") == name:
+            return entry, config["resources"], None
+        for child in entry.get("children") or []:
+            if child.get("name") == name:
+                return child, entry["children"], entry
+    return None, None, None
 
 
 def remove(config: dict, name: str) -> bool:
@@ -134,16 +174,16 @@ _LIQUIDS = [{"labware": "reservoir", "wells": "A1", "liquid": "buffer", "volume_
 
 STARTERS: Dict[str, dict] = {
     "OTDeck": {"deck_type": "OTDeck", "resources": [
-        {"name": "tips_300", "type": "opentrons_96_tiprack_300ul", "slot": 1},
-        {"name": "tips_300_b", "type": "opentrons_96_tiprack_300ul", "slot": 4},
+        {"name": "tips", "type": "opentrons_96_tiprack_300ul", "slot": 1},
+        {"name": "tips_b", "type": "opentrons_96_tiprack_300ul", "slot": 4},
         {"name": "reservoir", "type": _RESERVOIR, "slot": 2},
         {"name": "assay_plate", "type": _PLATE, "slot": 5},
         {"name": "sample_plate", "type": _PLATE, "slot": 6},
     ], "liquids": _LIQUIDS},
     "STARLetDeck": {"deck_type": "STARLetDeck", "resources": [
         {"name": "tip_carrier", "type": "TIP_CAR_480_A00", "rails": 3, "children": [
-            {"name": "tips_300", "type": "hamilton_96_tiprack_300uL_filter", "site": 0},
-            {"name": "tips_300_b", "type": "hamilton_96_tiprack_300uL_filter", "site": 1}]},
+            {"name": "tips", "type": "hamilton_96_tiprack_300uL_filter", "site": 0},
+            {"name": "tips_b", "type": "hamilton_96_tiprack_300uL_filter", "site": 1}]},
         {"name": "plate_carrier", "type": "PLT_CAR_L5AC_A00", "rails": 15, "children": [
             {"name": "reservoir", "type": _RESERVOIR, "site": 0},
             {"name": "assay_plate", "type": _PLATE, "site": 1},
@@ -152,9 +192,27 @@ STARTERS: Dict[str, dict] = {
 }
 
 
+STARTERS["STARDeck"] = {**copy.deepcopy(STARTERS["STARLetDeck"]), "deck_type": "STARDeck"}
+
+_TECAN = {"resources": [
+    # A Tecan EVO has no trash of its own: the waste position of the tip carrier is it.
+    {"name": "tip_carrier", "type": "DiTi_3Pos___Waste", "rails": 10, "children": [
+        {"name": "tips", "type": "DiTi_200ul_LiHa", "site": 0},
+        {"name": "tips_b", "type": "DiTi_200ul_LiHa", "site": 1},
+        {"name": "trash", "type": "Trash", "site": 3}]},
+    {"name": "plate_carrier", "type": "MP_3Pos", "rails": 17, "children": [
+        {"name": "reservoir", "type": _RESERVOIR, "site": 0},
+        {"name": "assay_plate", "type": _PLATE, "site": 1},
+        {"name": "sample_plate", "type": _PLATE, "site": 2}]},
+], "liquids": _LIQUIDS}
+for _kind in ("EVO100Deck", "EVO150Deck", "EVO200Deck"):
+    STARTERS[_kind] = {"deck_type": _kind, **copy.deepcopy(_TECAN)}
+
+
 def starter(deck_type: str) -> dict:
-    """A worktable to start from: tips, a reservoir with buffer and dye, two plates, with the same
-    names on every robot so one workflow runs on any of them. Empty for a deck with no starter."""
+    """A worktable to start from: two racks of the robot's own tips, a reservoir with buffer and
+    dye, two plates, with the same names on every robot (`tips`, `reservoir`, `assay_plate`, ...)
+    so one workflow runs on any of them. Empty for a deck with no starter."""
     if deck_type in STARTERS:
         return copy.deepcopy(STARTERS[deck_type])
     return {"deck_type": deck_type, "resources": [], "liquids": []}
@@ -164,14 +222,18 @@ def starter(deck_type: str) -> dict:
 
 _catalog: Optional[List[Dict[str, str]]] = None
 
+_KINDS = {"Plate": "plate", "TecanPlate": "plate", "TipRack": "tip_rack", "TecanTipRack": "tip_rack",
+          "TubeRack": "tube_rack", "Trough": "reservoir",
+          "PlateCarrier": "carrier", "TipCarrier": "carrier", "TroughCarrier": "carrier", "TubeCarrier": "carrier",
+          "MFXCarrier": "carrier", "TecanPlateCarrier": "carrier", "TecanTipCarrier": "carrier"}
+# Which maker's tips and carriers fit which robot. Plates, reservoirs and tube racks fit any.
+_MAKER = {"OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton",
+          "EVO100Deck": "tecan", "EVO150Deck": "tecan", "EVO200Deck": "tecan"}
 
-def catalog() -> List[Dict[str, str]]:
-    """Every plate, tip rack and reservoir PyLabRobot defines, by the name `type` takes. Read from
-    each definition's return type, so nothing is constructed to find out; an old spelling kept
-    as a deprecated alias is left out."""
+
+def _all_definitions() -> List[Dict[str, str]]:
     global _catalog
     if _catalog is None:
-        kinds = {"Plate": "plate", "TipRack": "tip_rack", "TubeRack": "tube_rack", "Trough": "reservoir"}
         found = []
         for name in dir(plr_resources):
             factory = getattr(plr_resources, name)
@@ -180,18 +242,39 @@ def catalog() -> List[Dict[str, str]]:
             try:
                 signature = inspect.signature(factory)
                 returns = signature.return_annotation
-                kind = kinds.get(returns if isinstance(returns, str) else getattr(returns, "__name__", ""))
+                kind = _KINDS.get(returns if isinstance(returns, str) else getattr(returns, "__name__", ""))
                 if not kind or list(signature.parameters)[:1] != ["name"]:
                     continue
                 if "deprecated" in inspect.getsource(factory).lower():
-                    continue
+                    continue  # an old spelling kept as an alias of the current one
             except (TypeError, ValueError, OSError):
                 continue
             if kind == "plate" and ("trough" in name.lower() or "reservoir" in name.lower()):
                 kind = "reservoir"
-            found.append({"definition": name, "category": kind})
+            module = getattr(factory, "__module__", "") or ""
+            maker = next((m for m in ("opentrons", "hamilton", "tecan") if f".{m}" in module), "")
+            found.append({"definition": name, "category": kind, "maker": maker})
         _catalog = sorted(found, key=lambda entry: (entry["category"], entry["definition"].lower()))
     return _catalog
+
+
+def catalog(deck_type: Optional[str] = None) -> List[Dict[str, str]]:
+    """What PyLabRobot defines that can go on this robot's worktable, by the name `type` takes:
+    plates, reservoirs and tube racks from anyone, tip racks and carriers by the robot's maker
+    (carriers only where there are rails to put them on). Read from each definition's return
+    type, so nothing is constructed to find out; an old spelling kept as an alias is left out."""
+    maker = _MAKER.get(deck_type or "", "")
+    rails = maker in ("hamilton", "tecan")
+    out = []
+    for entry in _all_definitions():
+        if entry["category"] == "carrier" and not (rails and entry["maker"] == maker):
+            continue
+        if entry["category"] == "tip_rack" and maker and entry["maker"] != maker:
+            continue
+        if entry["category"] == "plate" and entry["maker"] == "tecan" and maker != "tecan":
+            continue
+        out.append({"definition": entry["definition"], "category": entry["category"]})
+    return out
 
 
 def describe_decks() -> List[Dict[str, Any]]:

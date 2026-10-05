@@ -27,3 +27,10 @@ dev = ["pytest", "pytest-asyncio"]
 
 [project.urls]
 Homepage = "https://github.com/heingroup/ivoryos"
+
+[tool.setuptools.packages.find]
+include = ["plr_ivoryos*"]
+
+# The Labware view's page ships with the package (labware_view/__init__.py).
+[tool.setuptools.package-data]
+"plr_ivoryos.labware_view" = ["page/*"]

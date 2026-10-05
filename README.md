@@ -115,6 +115,27 @@ from it. From that, with no configuration:
 - the Labware panel shows the worktable live: what each well holds, which tips are left, and the
   wells a step is working on.
 
+### The Labware panel
+
+```json
+"plugins": ["plr_ivoryos.labware_view:plugin"]
+```
+
+in a deck file (or `ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view.plugin])`) adds it
+beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm:
+
+- drag labware from PyLabRobot's catalogue onto an empty slot or carrier position, and on a
+  Hamilton or Tecan a carrier onto the rails (it snaps to the nearest one); the catalogue shows
+  the robot's own tip racks and carriers;
+- drag anything already there to move it, × to take it off, and rename it in the list;
+- click a plate or reservoir, pick wells (click or drag), and **Fill** them with a liquid and a
+  volume: that is the `liquids` a run starts from, and it applies at once;
+- on the simulator, **Robot** switches between OT-2, STARlet, STAR and EVO. Each robot keeps its
+  own worktable in the file, so switching back loses nothing.
+
+Steps offer added, moved or renamed labware once the deck restarts (the panel offers the restart).
+The panel is the only part of this package that imports IvoryOS, and only IvoryOS NextGen loads it.
+
 The original IvoryOS shows these arguments as text fields.
 
 ---

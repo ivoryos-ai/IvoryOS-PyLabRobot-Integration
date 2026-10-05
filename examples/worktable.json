@@ -3,12 +3,12 @@
   "deck_type": "OTDeck",
   "resources": [
     {
-      "name": "tips_300",
+      "name": "tips",
       "type": "opentrons_96_tiprack_300ul",
       "slot": 1
     },
     {
-      "name": "tips_300_b",
+      "name": "tips_b",
       "type": "opentrons_96_tiprack_300ul",
       "slot": 4
     },

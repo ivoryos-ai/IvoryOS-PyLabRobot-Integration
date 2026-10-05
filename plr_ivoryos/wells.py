@@ -157,3 +157,36 @@ def expand_references(value: Any, grids: Dict[str, List[List[str]]], kinds: Opti
             raise ValueError(f"{e} on {labware}") from None
         out.extend((labware, well) for well in wells)
     return out
+
+
+def compact_wells(positions: Iterable[str], grid: List[List[str]]) -> str:
+    """The shortest selection that expands back to exactly `positions`, in order: runs down a
+    column or along a row become "A1:H1", and full-height neighbouring columns one rectangle.
+    (A copy of ivoryos_edge.labware.compact_wells.)"""
+    index = _index(grid)
+    names = [str(p) for p in positions]
+    if any(n not in index for n in names):
+        return ", ".join(names)
+    runs: List[List[str]] = []
+    for name in names:
+        run = runs[-1] if runs else None
+        if run:
+            (r0, c0), (r1, c1), (r, c) = index[run[0]], index[run[-1]], index[name]
+            step = (r1 - r0, c1 - c0) if len(run) > 1 else None
+            down = c == c1 and r == r1 + 1 and step in (None, (len(run) - 1, 0))
+            across = r == r1 and c == c1 + 1 and step in (None, (0, len(run) - 1))
+            if down or across:
+                run.append(name)
+                continue
+        runs.append([name])
+    merged: List[List[str]] = []
+    for run in runs:
+        previous = merged[-1] if merged else None
+        if previous and len(run) > 1:
+            (pr0, pc0), (pr1, pc1) = index[previous[0]], index[previous[-1]]
+            (r0, c0), (r1, c1) = index[run[0]], index[run[-1]]
+            if c0 == c1 and r0 == pr0 and r1 == pr1 and c0 == pc1 + 1 and pr1 > pr0:
+                previous[-1] = run[-1]
+                continue
+        merged.append([run[0], run[-1]] if len(run) > 1 else run)
+    return ", ".join(f"{run[0]}:{run[-1]}" if len(run) > 1 else run[0] for run in merged)

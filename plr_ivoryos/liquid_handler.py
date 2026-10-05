@@ -38,6 +38,7 @@ Only the simulator has been exercised by this package's tests.
 
 import asyncio
 import os
+import re
 import threading
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
@@ -47,7 +48,8 @@ from pylabrobot.resources import (Carrier, Container, ItemizedResource, Plate, R
 
 from plr_ivoryos import worktable
 from plr_ivoryos.async_bridge import run_async
-from plr_ivoryos.wells import ALL, Labware, PerWell, Site, WellSelection, Wells, expand_references, parse_references
+from plr_ivoryos.wells import (ALL, Labware, PerWell, Site, WellSelection, Wells, compact_wells, expand_references,
+                               expand_wells, parse_references)
 
 LIQUID_CONTAINERS = ("plate", "reservoir", "tube_rack")
 # A liquid nobody named: the volume is tracked, what it is is not.
@@ -191,12 +193,15 @@ class LiquidHandler:
 
     def _site_map(self) -> Dict[str, Any]:
         """Places a labware can sit, by the label a person uses: "5" on an OT-2, the carrier
-        position's own name ("plate_carrier-0") on a Hamilton."""
+        position's own name ("plate_carrier-0") on a Hamilton or Tecan. A position holding a
+        trash (a wash station's troughs, a tip carrier's waste) is not one."""
         deck, out = self._lh.deck, {}
 
         def walk(resource):
             for child in resource.children:
                 if isinstance(child, ResourceHolder):
+                    if any(isinstance(c, Trash) for c in child.children):
+                        continue
                     prefix = f"{deck.name}_slot_"
                     out[child.name[len(prefix):] if child.name.startswith(prefix) else child.name] = child
                 elif isinstance(child, Carrier) or not isinstance(child, (ItemizedResource, Container, Trash)):
@@ -208,13 +213,18 @@ class LiquidHandler:
     def __ivoryos_labware__(self) -> dict:
         """The worktable from above, in millimetres from the front left: each labware with its
         position names (`grid`, rows of columns) and each well's outline (`spots`), the places
-        labware can sit, and fixed things (carriers, the trash)."""
+        labware can sit, fixed things (carriers, trash), and on a Hamilton or Tecan the rails."""
         with self._lock:
             if self._layout is not None:
                 return self._layout
             deck = self._lh.deck
             sites = self._site_map()
             site_of = {id(holder): label for label, holder in sites.items()}
+            listed = {}
+            for entry in (self._config or {}).get("resources") or []:
+                listed[entry.get("name")] = entry
+                for child in entry.get("children") or []:
+                    listed[child.get("name")] = child
             labware = {}
             for name, resource in self._labware_map().items():
                 box = _box(resource)
@@ -228,9 +238,13 @@ class LiquidHandler:
                     spots[key] = [round(spot["x"] - box["x"], 2), round(spot["y"] - box["y"], 2),
                                   spot["w"], spot["h"], bool(round_)]
                 first = items[0] if items else None
+                holder = resource.parent
                 labware[name] = {
                     "label": name, "category": _category(resource), "model": getattr(resource, "model", None),
-                    "grid": _grid(resource), "site": site_of.get(id(resource.parent)),
+                    "definition": (listed.get(name) or {}).get("type"),
+                    "grid": _grid(resource), "site": site_of.get(id(holder)),
+                    "carrier": holder.parent.name if isinstance(getattr(holder, "parent", None), Carrier) else None,
+                    "editable": name in listed,
                     "max_volume_ul": getattr(first, "max_volume", None), **box, "spots": spots,
                 }
             fixtures = []
@@ -238,8 +252,11 @@ class LiquidHandler:
             def walk(resource):
                 for child in resource.children:
                     if isinstance(child, (Carrier, Trash)):
+                        entry = listed.get(child.name) or {}
                         fixtures.append({"name": child.name, **_box(child),
-                                         "category": "trash" if isinstance(child, Trash) else "carrier"})
+                                         "category": "trash" if isinstance(child, Trash) else "carrier",
+                                         "definition": entry.get("type"), "rails": entry.get("rails"),
+                                         "editable": child.name in listed})
                     if isinstance(child, (Carrier, ResourceHolder)):
                         walk(child)
 
@@ -248,10 +265,11 @@ class LiquidHandler:
             self._layout = {
                 "deck": {"name": deck.name, "kind": kind, "label": worktable.DECKS.get(kind, kind),
                          "width": deck.get_absolute_size_x(), "depth": deck.get_absolute_size_y(),
-                         "simulated": self._simulated},
+                         "simulated": self._simulated, "rails": worktable.rails_of(deck)},
                 "labware": labware,
                 "sites": [{"name": holder.name, "label": label, **_box(holder),
-                           "holds": holder.children[0].name if holder.children else None}
+                           "holds": holder.children[0].name if holder.children else None,
+                           "carrier": holder.parent.name if isinstance(holder.parent, Carrier) else None}
                           for label, holder in sites.items()],
                 "fixtures": fixtures,
             }
@@ -301,75 +319,255 @@ class LiquidHandler:
     # --- changing the worktable (IvoryOS's Labware view) ------------------------------------------
 
     def __ivoryos_labware_catalog__(self) -> dict:
-        """What can be put on this worktable, and which robots it can be switched to. Both empty
-        when there is no worktable file to save a change to; robots only on the simulator, since a
-        real robot is the robot it is."""
+        """What can be put on this worktable (with carriers where it has rails), and which robots it
+        can be switched to. Empty when there is no worktable file to save a change to; robots only
+        on the simulator, since a real robot is the robot it is."""
         editable = self._config is not None and self._path is not None
+        kind = (self._config or {}).get("deck_type")
         return {
-            "labware": worktable.catalog() if editable else [],
+            "labware": worktable.catalog(kind) if editable else [],
             "decks": worktable.describe_decks() if editable and self._simulated else [],
-            "deck": (self._config or {}).get("deck_type"),
+            "deck": kind,
         }
 
-    def __ivoryos_labware_edit__(self, action: str, **change) -> None:
-        """Place or remove a labware, or (simulator) start over on another robot's worktable.
-        This says what a person put on the worktable, exactly as the file does; nothing moves.
-        Saved to the worktable file. Raises ValueError for what cannot be done."""
+    def __ivoryos_labware_edit__(self, action: str, **change) -> dict:
+        """Change the worktable, the way a person changes the real one; nothing moves.
+
+            place   definition, site (a slot or carrier position) or rails (a carrier), name optional
+            move    name, site or rails
+            rename  name, to
+            remove  name (a carrier takes what is on it with it)
+            liquid  labware, wells, liquid, volume_ul: what those wells hold (empty with no liquid)
+            deck    deck: another robot (simulator only); each robot keeps its own worktable
+
+        Saved to the worktable file at once. Returns {"restart": True} when steps only offer the
+        change after a restart (labware names are part of the deck's schema). Raises ValueError for
+        what cannot be done."""
         if self._config is None or self._path is None:
             raise ValueError("This worktable has no file to save to: give the LiquidHandler deck_json to edit it here.")
-        if any(getattr(channel, "has_tip", False) for channel in (getattr(self._lh, "head", {}) or {}).values()):
+        structural = action != "liquid"
+        if structural and self._mounted():
             raise ValueError("Tips are on the head: drop them before changing the worktable.")
         with self._lock:
             if action == "place":
-                self._edit_place(str(change.get("site", "")), str(change.get("definition", "")),
-                                 str(change.get("name", "")).strip())
+                name = self._edit_place(str(change.get("definition", "")), change.get("site"), change.get("rails"),
+                                        str(change.get("name") or "").strip())
+            elif action == "move":
+                name = self._edit_move(str(change.get("name", "")), change.get("site"), change.get("rails"))
+            elif action == "rename":
+                name = self._edit_rename(str(change.get("name", "")), str(change.get("to", "")).strip())
             elif action == "remove":
-                self._edit_remove(str(change.get("name", "")))
+                name = self._edit_remove(str(change.get("name", "")))
+            elif action == "liquid":
+                name = self._edit_liquid(str(change.get("labware", "")), change.get("wells"),
+                                         str(change.get("liquid") or "").strip(), change.get("volume_ul"))
             elif action == "deck":
-                self._edit_deck(str(change.get("deck", "")))
+                name = self._edit_deck(str(change.get("deck", "")))
             else:
                 raise ValueError(f"'{action}' is not something that can be done to a worktable.")
             self._layout = None
             worktable.save(self._path, self._config)
-        self._notify("layout", change.get("name"))
+        self._notify("layout" if structural else "load", name)
+        return {"name": name, "restart": structural}
 
-    def _edit_place(self, site: str, definition: str, name: str) -> None:
-        import re
-        sites = self._site_map()
-        if site not in sites:
-            raise ValueError(f"'{site}' is not a place on this worktable.")
-        holder = sites[site]
-        if holder.children:
-            raise ValueError(f"{site} already holds {holder.children[0].name}.")
+    def _check_name(self, name: str) -> None:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
-            raise ValueError("A labware's name starts with a letter and has only letters, digits and _.")
+            raise ValueError("A name starts with a letter and has only letters, digits and _.")
         if self._lh.deck.has_resource(name):
             raise ValueError(f"Something on this worktable is already called '{name}'.")
-        holder.assign_child_resource(worktable.make(definition, name))
+
+    def _free_name(self, definition: str) -> str:
+        kind = next((e["category"] for e in worktable.catalog() + worktable.catalog(self._config.get("deck_type"))
+                     if e["definition"] == definition), "labware")
+        prefix = {"plate": "plate", "tip_rack": "tips", "reservoir": "reservoir", "tube_rack": "tubes",
+                  "carrier": "carrier"}.get(kind, "labware")
+        n = 1
+        while self._lh.deck.has_resource(f"{prefix}_{n}"):
+            n += 1
+        return f"{prefix}_{n}"
+
+    def _holder(self, site) -> Any:
+        sites = self._site_map()
+        if str(site) not in sites:
+            raise ValueError(f"'{site}' is not a place on this worktable.")
+        holder = sites[str(site)]
+        if holder.children:
+            raise ValueError(f"{site} already holds {holder.children[0].name}.")
+        return holder
+
+    def _rails(self, rails) -> int:
+        count = getattr(self._lh.deck, "num_rails", None)
+        if not count:
+            raise ValueError("This worktable has slots, not rails: put labware in a slot.")
+        try:
+            rails = int(rails)
+        except (TypeError, ValueError):
+            raise ValueError("rails is a rail number") from None
+        if not 1 <= rails <= count:
+            raise ValueError(f"Rails run from 1 to {count}.")
+        return rails
+
+    def _on_deck(self, resource, rails: int) -> None:
+        try:
+            self._lh.deck.assign_child_resource(resource, rails=rails)
+        except ValueError as e:  # PyLabRobot: "Location ... is already occupied by resource 'x'"
+            raise ValueError(f"It does not fit at rail {rails}: {e}") from None
+
+    def _entry_for(self, holder, entry: dict) -> None:
+        """Write `entry` (name, type) into the file where `holder` is: a slot, or a carrier's site."""
         carrier = holder.parent if isinstance(holder.parent, Carrier) else None
-        resources = self._config.setdefault("resources", [])
         if carrier is None:
-            resources.append({"name": name, "type": definition, "slot": int(site)})
+            self._config.setdefault("resources", []).append({**entry, "slot": int(self._site_label(holder))})
             return
-        entry = next((e for e in resources if e.get("name") == carrier.name), None)
-        if entry is None:
+        parent, _, _ = worktable.find(self._config, carrier.name)
+        if parent is None:
             raise ValueError(f"{carrier.name} is not in the worktable file, so nothing can be saved on it.")
-        entry.setdefault("children", []).append(
-            {"name": name, "type": definition, "site": carrier.children.index(holder)})
+        parent.setdefault("children", []).append({**entry, "site": carrier.children.index(holder)})
 
-    def _edit_remove(self, name: str) -> None:
-        self._resource(name).unassign()
-        worktable.remove(self._config, name)
-        self._config["liquids"] = [e for e in self._config.get("liquids") or [] if e.get("labware") != name]
+    def _site_label(self, holder) -> str:
+        return next(label for label, h in self._site_map().items() if h is holder)
+
+    def _edit_place(self, definition: str, site, rails, name: str) -> str:
+        if not definition:
+            raise ValueError("Say which labware to place.")
+        name = name or self._free_name(definition)
+        self._check_name(name)
+        if rails not in (None, ""):
+            rails = self._rails(rails)
+            resource = worktable.make(definition, name)
+            if not isinstance(resource, Carrier):
+                raise ValueError(f"{definition} is not a carrier: put it in a carrier position.")
+            self._on_deck(resource, rails)
+            self._config.setdefault("resources", []).append({"name": name, "type": definition, "rails": rails})
+            return name
+        holder = self._holder(site)
+        resource = worktable.make(definition, name)
+        if isinstance(resource, Carrier):
+            raise ValueError(f"{definition} is a carrier: it goes on the rails, not in a position.")
+        holder.assign_child_resource(resource)
+        try:
+            self._entry_for(holder, {"name": name, "type": definition})
+        except ValueError:
+            resource.unassign()
+            raise
+        return name
+
+    def _edit_move(self, name: str, site, rails) -> str:
+        entry, siblings, _ = worktable.find(self._config, name)
+        if entry is None:
+            raise ValueError(f"'{name}' is not in the worktable file, so it cannot be moved from here.")
+        resource = self._lh.deck.get_resource(name)
+        if rails not in (None, ""):
+            rails = self._rails(rails)
+            if not isinstance(resource, Carrier):
+                raise ValueError(f"{name} is not a carrier: move it to a position.")
+            before = resource.location
+            resource.unassign()
+            try:
+                self._on_deck(resource, rails)
+            except ValueError:
+                self._lh.deck.assign_child_resource(resource, location=before)
+                raise
+            entry.pop("location", None)
+            entry["rails"] = rails
+            return name
+        holder = self._holder(site)
+        if isinstance(resource, Carrier):
+            raise ValueError(f"{name} is a carrier: move it along the rails.")
+        old_holder = resource.parent
+        resource.unassign()
+        holder.assign_child_resource(resource)
+        siblings.remove(entry)
+        moved = {k: v for k, v in entry.items() if k not in ("slot", "site", "rails", "location")}
+        try:
+            self._entry_for(holder, moved)
+        except ValueError:
+            resource.unassign()
+            old_holder.assign_child_resource(resource)
+            siblings.append(entry)
+            raise
+        return name
+
+    def _edit_rename(self, name: str, to: str) -> str:
+        entry, _, _ = worktable.find(self._config, name)
+        if entry is None:
+            raise ValueError(f"'{name}' is not in the worktable file, so it cannot be renamed from here.")
+        if to == name:
+            return name
+        self._check_name(to)
+        resource = self._lh.deck.get_resource(name)
+        parent, location = resource.parent, resource.location
+        resource.unassign()  # PyLabRobot only renames a resource that is not on anything
+        resource.name = to
+        parent.assign_child_resource(resource, location=location)
+        entry["name"] = to
+        for liquid in self._config.get("liquids") or []:
+            if liquid.get("labware") == name:
+                liquid["labware"] = to
         for key in [k for k in self._contents if k[0] == name]:
-            del self._contents[key]
+            self._contents[(to, key[1])] = self._contents.pop(key)
+        return to
 
-    def _edit_deck(self, kind: str) -> None:
+    def _edit_remove(self, name: str) -> str:
+        entry, _, _ = worktable.find(self._config, name)
+        if entry is None:
+            raise ValueError(f"'{name}' is not in the worktable file, so it cannot be removed from here.")
+        gone = {name, *(child.get("name") for child in entry.get("children") or [])}
+        self._lh.deck.get_resource(name).unassign()
+        worktable.remove(self._config, name)
+        self._config["liquids"] = [e for e in self._config.get("liquids") or [] if e.get("labware") not in gone]
+        for key in [k for k in self._contents if k[0] in gone]:
+            del self._contents[key]
+        return name
+
+    def _edit_liquid(self, labware: str, wells, liquid: str, volume_ul) -> str:
+        """What these wells hold from now on, and at every start: `liquid` at `volume_ul` each,
+        replacing what they held. No liquid (or 0) empties them."""
+        targets = self._wells(f"{labware}[{', '.join(wells) if isinstance(wells, (list, tuple)) else (wells or 'all')}]")
+        volume = 0.0 if not liquid else float(volume_ul or 0)
+        if volume < 0:
+            raise ValueError("A volume cannot be negative.")
+        for _, well, container in targets:
+            if volume > (container.max_volume or float("inf")) + 1e-9:
+                raise ValueError(f"{labware}[{well}] holds at most {container.max_volume:g} µL.")
+        chosen = {well for _, well, _ in targets}
+        grid = _grid(self._resource(labware))
+        kept = []
+        for entry in self._config.get("liquids") or []:
+            if entry.get("labware") != labware:
+                kept.append(entry)
+                continue
+            listed = entry.get("wells", ALL)
+            listed = ", ".join(listed) if isinstance(listed, (list, tuple)) else listed
+            remaining = [w for w in expand_wells(listed, grid) if w not in chosen]
+            if remaining:
+                kept.append({**entry, "wells": compact_wells(remaining, grid)})
+        if volume > 0:
+            kept.append({"labware": labware, "wells": compact_wells([w for _, w, _ in targets], grid),
+                         "liquid": liquid, "volume_ul": volume})
+        self._config["liquids"] = kept
+        for name, well, container in targets:
+            container.tracker.set_volume(volume)
+            if volume > 0:
+                self._contents[(name, well)] = {liquid: volume}
+            else:
+                self._contents.pop((name, well), None)
+        return labware
+
+    def _edit_deck(self, kind: str) -> str:
         if not self._simulated:
             raise ValueError("A real robot's worktable is the robot's own; only the simulator can be switched.")
         if kind not in worktable.DECKS:
             raise ValueError(f"'{kind}' is not a robot this can simulate ({', '.join(worktable.DECKS)}).")
-        self._config = worktable.starter(kind)
+        current = self._config.get("deck_type") or worktable.DEFAULT_DECK
+        if kind == current:
+            return kind
+        # Each robot keeps the worktable it had, so switching back loses nothing.
+        others = dict(self._config.pop("other_worktables", None) or {})
+        others[current] = {k: v for k, v in self._config.items() if k != "format"}
+        self._config = others.pop(kind, None) or worktable.starter(kind)
+        if others:
+            self._config["other_worktables"] = others
         self._lh = _PLRLiquidHandler(backend=_simulator(self._channel_count()),
                                      deck=worktable.build_deck(self._config), **self._kwargs)
         self._ready = False
@@ -377,6 +575,7 @@ class LiquidHandler:
         self._contents.clear()
         self._in_tips.clear()
         self._load_liquids()
+        return kind
 
     # --- resolving names ------------------------------------------------------------------------------
 
