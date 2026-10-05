@@ -8,9 +8,16 @@
 
 **The native PyLabRobot experience, powered by IvoryOS.**
 
-`plr-ivoryos` provides IvoryOS-compatible UI wrappers for standard PyLabRobot classes. It allows you to build, simulate, and execute complex lab automation workflows using a visual interface, with **no manual wrapper code** required.
+`plr-ivoryos` puts PyLabRobot's liquid handlers and other machines into IvoryOS with **no wrapper
+code**: every step keeps PyLabRobot's own name and arguments, the worktable is a file rather than
+code, and in IvoryOS NextGen the Labware panel shows that worktable live and lets you build it by
+dragging.
 
-![IvoryOS UI Screenshot](docs/ui_screenshot.png)
+![IvoryOS NextGen running a dye dilution on a simulated Hamilton STARlet, with the Labware panel beside the run](https://raw.githubusercontent.com/ivoryos-ai/IvoryOS-PyLabRobot-Integration/main/docs/ivoryos-iterate.png)
+
+*A dye dilution on PyLabRobot's simulated Hamilton STARlet. One spreadsheet row per sample, batch
+size 8: each `transfer` moves a column of eight wells. The Labware panel (right) shows the
+worktable on its rails, what each well now holds and which tips are left.*
 
 ---
 
@@ -26,11 +33,27 @@ lh = LiquidHandler(simulated=True)    # its worktable is worktable.json, written
 scale = Scale(simulated=True)
 
 if __name__ == "__main__":
-    import ivoryos_edge            # IvoryOS NextGen; `import ivoryos; ivoryos.run(__name__)` for the original
-    ivoryos_edge.run(__name__)
+    # IvoryOS NextGen, with the Labware panel beside every page
+    import ivoryos_edge
+    from plr_ivoryos.labware_view import plugin as labware_view
+    ivoryos_edge.run(__name__, plugins=[labware_view])
+    # The original IvoryOS instead: import ivoryos; ivoryos.run(__name__)
 ```
 
 Every step can also be called from plain Python: `lh.transfer(...)` blocks until it is done.
+
+### From the IvoryOS desktop app
+
+No script at all:
+
+1. In the Hub, add a liquid handler (simulated, Opentrons OT-2, Hamilton STAR, Nimbus or Vantage,
+   Tecan EVO) together with the **Labware (PyLabRobot)** plugin. Fill in the robot's own
+   connection settings; leave `deck_json` empty.
+2. Start the deck. A real robot starts with its own empty worktable, the simulator with a
+   ready-made one, and the Labware panel says how to begin.
+3. **Edit layout**: drag carriers onto the rails and labware onto them, fill wells, choose the
+   model. Or **Import a layout…** you already have.
+4. Restart the deck when the panel asks: steps then offer the labware you placed.
 
 ---
 
@@ -68,8 +91,7 @@ IvoryOS runs it (`IVORYOS_DATA_DIR`, which the desktop app sets), else in the wo
 relative `deck_json` is in that folder too. A file that does not exist yet is not an error: the
 simulator starts from a ready-made worktable (tips, a reservoir with buffer and dye, two plates), a
 real robot from its own empty one (`deck_type` says which model, e.g. `STARDeck` rather than the
-default STARlet), and the file is written on the first change. So a deck made in the desktop app,
-with nothing but a backend chosen, is built from scratch in the Labware panel.
+default STARlet), and the file is written on the first change.
 
 Beside it, plr-ivoryos keeps PyLabRobot's own description of the same worktable up to date, so a
 plain PyLabRobot script (or anyone without this package) uses the layout as designed:
@@ -82,10 +104,8 @@ deck.load_state_from_file("worktable.pylabrobot-state.json")      # full tip rac
 
 Those two are written whenever the worktable is loaded or changed, from the file as a run starts
 (not from a deck a run has used tips from). Edit `worktable.json`; the others are output.
-PyLabRobot 0.2.2 cannot read back its own Tecan wash station, so a Tecan worktable gets none (the
-Labware panel says so). In IvoryOS NextGen the Labware panel edits this file:
-place or remove labware from PyLabRobot's catalogue, switch the robot without touching the script,
-and import a layout you already have.
+PyLabRobot 0.2.2 cannot read back its own Tecan, Nimbus or Vantage decks, so those worktables get
+none (the Labware panel says so).
 
 A real robot is the same line with its backend:
 
@@ -138,6 +158,15 @@ from it. From that, with no configuration:
 - the Labware panel shows the worktable live: what each well holds, which tips are left, and the
   wells a step is working on.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ivoryos-ai/IvoryOS-PyLabRobot-Integration/main/docs/well-picker.png" alt="Picking wells for a spreadsheet column on a drawing of the plate" width="520">
+</p>
+
+*Picking the wells for a column of samples: the plate is chosen in the same picker, and the
+numbers are the order the samples will be visited in.*
+
+The original IvoryOS shows these arguments as text fields.
+
 ### The Labware panel
 
 ```json
@@ -145,7 +174,18 @@ from it. From that, with no configuration:
 ```
 
 in a deck file (or `ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view.plugin])`) adds it
-beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm:
+beside every page. Click a plate to look at it well by well.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ivoryos-ai/IvoryOS-PyLabRobot-Integration/main/docs/labware-panel-plate.png" alt="The Labware panel zoomed on a plate: each well coloured by the buffer and dye it holds" width="49%">
+  <img src="https://raw.githubusercontent.com/ivoryos-ai/IvoryOS-PyLabRobot-Integration/main/docs/labware-panel-edit.png" alt="Edit layout on a Hamilton STARlet: carriers on numbered rails, the robot choice, Import a layout and PyLabRobot's catalogue" width="49%">
+</p>
+
+*Left: after the run above, each well coloured by what it holds (buffer blue, dye red). Right:
+**Edit layout** on the STARlet, with its carriers on the numbered rails and PyLabRobot's
+catalogue to drag from.*
+
+**Edit layout** changes the worktable file as you go, with nothing to confirm:
 
 - drag labware from PyLabRobot's catalogue onto an empty slot or carrier position, and on a
   Hamilton or Tecan a carrier onto the rails (it snaps to the nearest one); the catalogue shows
@@ -165,15 +205,13 @@ beside every page. **Edit layout** changes the worktable file as you go, with no
 Steps offer added, moved or renamed labware once the deck restarts (the panel offers the restart).
 The panel is the only part of this package that imports IvoryOS, and only IvoryOS NextGen loads it.
 
-The original IvoryOS shows these arguments as text fields.
-
 ---
 
 ## Supported Devices
 
 | Device Type | Class Name | Simulation Shortcut | Common Backends |
 | :--- | :--- | :---: | :--- |
-| **Liquid Handler** | `LiquidHandler` | `simulated=True` | Hamilton STAR, OT-2, Tecan EVO |
+| **Liquid Handler** | `LiquidHandler` | `simulated=True` | Hamilton STAR / STARlet, Nimbus, Vantage; Opentrons OT-2; Tecan EVO |
 | **Balance** | `Scale` | `simulated=True` | Mettler Toledo |
 | **Pumps** | `Pump` | `simulated=True` | Cole-Parmer Masterflex |
 | **Heater/Shaker** | `HeaterShaker` | `simulated=True` | Inheco ThermoShake |
@@ -181,6 +219,9 @@ The original IvoryOS shows these arguments as text fields.
 | **Plate Reader** | `PlateReader` | `simulated=True` | CLARIOstar, Cytation5 |
 | **Fans** | `Fan` | `simulated=True` | Hamilton HEPA |
 | **Thermocycler** | `Thermocycler` | `simulated=True` | Any PLR-supported TC |
+
+The liquid handler in 0.2 has been tested on PyLabRobot's simulator; it has not yet been run on a
+real robot.
 
 ---
 
@@ -190,14 +231,9 @@ The original IvoryOS shows these arguments as text fields.
 pip install plr-ivoryos
 ```
 
-Or from source:
+Python 3.10 or newer, PyLabRobot 0.2.2 or newer. Or from source:
 ```bash
 pip install .
-```
-
-Or using the requirements file:
-```bash
-pip install -r requirements.txt
 ```
 
 ---
@@ -211,11 +247,17 @@ stay on the loop that opened it. Steps are therefore ordinary synchronous calls,
 (either version) or from plain Python.
 
 ### What changed in 0.2
-`LiquidHandler` is an ordinary class (0.1 returned a new class per deck, so its steps could only
-be found by building one). The runtime Enum registry is gone: labware choices come from the
-worktable. Steps take PyLabRobot's own argument names, with wells written `plate[A1:H1]` (0.1:
-`plate_name` + `resources`, `tip_rack_name` + `tip_spots`, and `transfer`'s own names). `simulated=True` with no layout works again (0.1 placed two plates on one
-spot). `Scale.read_weight` works with PyLabRobot 0.2.2.
+- **Breaking for 0.1 workflows:** steps take PyLabRobot's own argument names, with wells written
+  `plate[A1:H1]`. 0.1's `plate_name` + `resources`, `tip_rack_name` + `tip_spots`, and
+  `transfer`'s `source_plate` / `source_well` / `dest_plate` / `dest_well` are gone, so saved
+  liquid-handler steps need redoing. Layout files from 0.1 still load.
+- `LiquidHandler` is an ordinary class (0.1 returned a new class per deck, so its steps could only
+  be found by building one). The runtime Enum registry is gone: labware choices come from the
+  worktable.
+- The worktable is a file you can leave out, with PyLabRobot's own copy written beside it; the
+  Labware panel edits it and imports existing layouts. Nimbus and Vantage worktables are new.
+- `simulated=True` with no layout works again (0.1 placed two plates on one spot).
+  `Scale.read_weight` works with PyLabRobot 0.2.2.
 
 ---
 
