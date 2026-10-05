@@ -24,6 +24,13 @@ command-line flag:
 - `other_worktables` keeps, per robot, the worktable it had before the robot was switched, so
   switching back loses nothing.
 
+This file is the one a person (or the Hub, or the Labware panel) writes: short, by name. Whenever
+the LiquidHandler loads or saves it, it also writes PyLabRobot's own description of the same
+worktable beside it (`export_pylabrobot`): `worktable.pylabrobot.json`, every resource with its
+size and absolute position, which plain PyLabRobot loads with `Deck.load_from_json_file`, and
+`worktable.pylabrobot-state.json`, full tip racks and the starting liquids, for
+`deck.load_state_from_file`. Those copies are output; edit this one.
+
 IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, change robot)
 through the LiquidHandler.
 """
@@ -36,7 +43,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 import pylabrobot.resources as plr_resources
-from pylabrobot.resources import Carrier, Coordinate, Trash
+from pylabrobot.resources import Carrier, Coordinate, ItemizedResource, Trash
+
+from plr_ivoryos.wells import ALL, expand_wells
 
 FORMAT = "plr-ivoryos-worktable/1"
 DEFAULT_DECK = "STARLetDeck"
@@ -148,6 +157,66 @@ def find(config: dict, name: str):
             if child.get("name") == name:
                 return child, entry["children"], entry
     return None, None, None
+
+
+def grid_of(resource) -> List[List[str]]:
+    """Position names as rows of columns. PyLabRobot lists items column by column."""
+    if not isinstance(resource, ItemizedResource):
+        return [["A1"]]
+    rows, columns = resource.num_items_y, resource.num_items_x
+    names = [resource.get_child_identifier(item) for item in resource.get_all_items()]
+    if len(names) != rows * columns:
+        return [names]
+    return [[names[c * rows + r] for c in range(columns)] for r in range(rows)]
+
+
+def apply_liquids(deck, config: dict) -> None:
+    """Set the volumes `liquids` gives, on a deck built from this file (what a run starts from)."""
+    for entry in config.get("liquids") or []:
+        if not deck.has_resource(entry["labware"]):
+            continue
+        resource = deck.get_resource(entry["labware"])
+        wells = entry.get("wells", ALL)
+        wells = ", ".join(wells) if isinstance(wells, (list, tuple)) else wells
+        for well in expand_wells(wells, grid_of(resource)):
+            item = resource.get_item(well) if isinstance(resource, ItemizedResource) else resource
+            item.tracker.set_volume(float(entry["volume_ul"]))
+
+
+def pylabrobot_paths(path: str) -> Dict[str, str]:
+    """Where PyLabRobot's own copy of a worktable file goes, beside it: worktable.json ->
+    worktable.pylabrobot.json (the layout) and worktable.pylabrobot-state.json (full tip racks and
+    the starting liquids, which PyLabRobot keeps apart from the layout)."""
+    stem = os.path.splitext(path)[0]
+    return {"layout": stem + ".pylabrobot.json", "state": stem + ".pylabrobot-state.json"}
+
+
+def export_pylabrobot(config: dict, path: str) -> Optional[str]:
+    """Write this worktable as PyLabRobot itself reads it, as it is when a run starts:
+
+        deck = Deck.load_from_json_file("worktable.pylabrobot.json")      # every labware, placed
+        deck.load_state_from_file("worktable.pylabrobot-state.json")       # tips and volumes
+
+    Built fresh from the file (not from a deck a run has used tips from), and checked by reading
+    both back the way PyLabRobot would. Returns why not when it cannot (PyLabRobot 0.2.2 cannot read
+    back its own Tecan wash station), and then leaves no files behind."""
+    from pylabrobot.resources import Deck
+    targets = pylabrobot_paths(path)
+    scratch = {part: target + ".tmp" for part, target in targets.items()}
+    try:
+        deck = build_deck(config)
+        apply_liquids(deck, config)
+        deck.save(scratch["layout"])
+        deck.save_state_to_file(scratch["state"])
+        Deck.load_from_json_file(scratch["layout"]).load_state_from_file(scratch["state"])
+    except Exception as e:
+        for leftover in [*scratch.values(), *targets.values()]:
+            if os.path.exists(leftover):
+                os.remove(leftover)
+        return f"PyLabRobot cannot read this worktable back ({type(e).__name__}: {e})"
+    for part, target in targets.items():
+        os.replace(scratch[part], target)
+    return None
 
 
 def remove(config: dict, name: str) -> bool:

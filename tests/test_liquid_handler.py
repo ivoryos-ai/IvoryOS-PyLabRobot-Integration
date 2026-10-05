@@ -432,3 +432,73 @@ def test_a_real_robot_or_a_deck_built_in_code_is_not_rearranged_from_ivoryos(tmp
     assert built.__ivoryos_labware_catalog__()["labware"] == []
     with pytest.raises(ValueError, match="no file to save to"):
         built.__ivoryos_labware_edit__("remove", name="assay_plate")
+
+
+def test_the_worktable_is_also_written_for_pyLabRobot_itself(tmp_path, capsys):
+    """worktable.json is plr-ivoryos's short, by-name file; beside it go PyLabRobot's own layout
+    and starting state, which a plain PyLabRobot script loads without this package."""
+    import asyncio
+    from pylabrobot.liquid_handling import LiquidHandler as PLR
+    from pylabrobot.liquid_handling.backends import LiquidHandlerChatterboxBackend
+    from pylabrobot.resources import Deck
+
+    path = write(tmp_path, OT2)
+    lh = LiquidHandler(simulated=True, deck_json=path)
+    files = lh.__ivoryos_labware__()["deck"]["pylabrobot_files"]
+    assert files == {"layout": str(tmp_path / "worktable.pylabrobot.json"),
+                     "state": str(tmp_path / "worktable.pylabrobot-state.json")}
+
+    def load():
+        deck = Deck.load_from_json_file(files["layout"])
+        deck.load_state_from_file(files["state"])
+        return deck
+
+    deck = load()
+    for name in ("tips_300", "reservoir", "assay_plate"):
+        assert deck.get_resource(name).get_absolute_location() == lh._lh.deck.get_resource(name).get_absolute_location()
+    assert deck.get_resource("reservoir")["A1"][0].tracker.get_used_volume() == 10000
+    assert deck.get_resource("tips_300")["H12"][0].has_tip()
+
+    async def plain_pylabrobot():
+        robot = PLR(backend=LiquidHandlerChatterboxBackend(), deck=load())
+        await robot.setup()
+        await robot.pick_up_tips(robot.deck.get_resource("tips_300")["A1:H1"])
+        await robot.aspirate(robot.deck.get_resource("reservoir")["A1"] * 6, vols=[10] * 6, use_channels=list(range(6)), spread="tight")
+    asyncio.run(plain_pylabrobot())
+
+    # It is the start of a run: tips a run used here are still in PyLabRobot's copy.
+    lh.transfer(source="reservoir[A1]", targets="assay_plate[A1:H1]", target_vols=10, tip_rack="tips_300")
+    # It follows the worktable: what is placed, moved or filled in IvoryOS is there for PyLabRobot too.
+    lh.__ivoryos_labware_edit__("place", definition="cor_96_wellplate_360uL_Fb", site="9")
+    lh.__ivoryos_labware_edit__("move", name="assay_plate", site="6")
+    lh.__ivoryos_labware_edit__("liquid", labware="plate_1", wells="A1:H1", liquid="sample", volume_ul=50)
+    deck = load()
+    assert deck.get_resource("plate_1").get_absolute_location() == lh._lh.deck.get_resource("plate_1").get_absolute_location()
+    assert deck.get_resource("assay_plate").parent.name == "ot2_deck_slot_6"
+    assert deck.get_resource("plate_1")["H1"][0].tracker.get_used_volume() == 50
+    assert deck.get_resource("tips_300")["A1"][0].has_tip(), "a run's used tips are not the start"
+
+    # PyLabRobot 0.2.2 cannot read back its own Tecan wash station: then there are no files, and why.
+    evo = LiquidHandler(simulated=True, deck_json=write(tmp_path, worktable.starter("EVO150Deck"), "evo.json"))
+    info = evo.__ivoryos_labware__()["deck"]
+    assert info["pylabrobot_files"] == {} and "cannot read this worktable back" in info["pylabrobot_error"]
+    assert not list(tmp_path.glob("evo.pylabrobot*"))
+
+
+def test_the_panel_offers_the_pyLabRobot_file_for_download(lh, monkeypatch):
+    pytest.importorskip("ivoryos_edge")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from plr_ivoryos import labware_view
+
+    monkeypatch.setattr(labware_view.plugin, "instruments", {"lh": lh})
+    page = FastAPI()
+    page.include_router(labware_view.plugin.router)
+    with TestClient(page) as client:
+        got = client.get("/api/pylabrobot", params={"worktable": "lh"})
+        assert got.status_code == 200 and "worktable.pylabrobot.json" in got.headers["content-disposition"]
+        assert got.json()["type"] == "OTDeck"
+        state = client.get("/api/pylabrobot", params={"worktable": "lh", "part": "state"})
+        assert "worktable.pylabrobot-state.json" in state.headers["content-disposition"]
+        assert state.json()["reservoir_well_A2"]["volume"] == 5000
+        assert client.get("/api/pylabrobot", params={"worktable": "nope"}).status_code == 404

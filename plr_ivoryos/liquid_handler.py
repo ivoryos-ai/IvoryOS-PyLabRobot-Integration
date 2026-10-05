@@ -71,15 +71,7 @@ def _category(resource) -> str:
     return str(getattr(resource, "category", None) or "rack")
 
 
-def _grid(resource) -> List[List[str]]:
-    """Position names as rows of columns. PyLabRobot lists items column by column."""
-    if not isinstance(resource, ItemizedResource):
-        return [["A1"]]
-    rows, columns = resource.num_items_y, resource.num_items_x
-    names = [resource.get_child_identifier(item) for item in resource.get_all_items()]
-    if len(names) != rows * columns:
-        return [names]
-    return [[names[c * rows + r] for c in range(columns)] for r in range(rows)]
+_grid = worktable.grid_of
 
 
 def _box(resource) -> Dict[str, float]:
@@ -145,7 +137,16 @@ class LiquidHandler:
         self._in_tips: Dict[int, Dict[str, float]] = {}
         self._listeners: list = []
         self._layout: Optional[dict] = None
+        self._pylabrobot_error: Optional[str] = None
         self._load_liquids()
+        if self._path and self._config is not None and os.path.exists(self._path):
+            self._export_pylabrobot()
+
+    def _export_pylabrobot(self) -> None:
+        """PyLabRobot's own copy of the worktable, beside the worktable file (worktable.py)."""
+        self._pylabrobot_error = worktable.export_pylabrobot(self._config, self._path)
+        if self._pylabrobot_error:
+            print(f"plr-ivoryos: {self._pylabrobot_error}")
 
     def _load_liquids(self) -> None:
         for entry in (self._config or {}).get("liquids") or []:
@@ -265,7 +266,11 @@ class LiquidHandler:
             self._layout = {
                 "deck": {"name": deck.name, "kind": kind, "label": worktable.DECKS.get(kind, kind),
                          "width": deck.get_absolute_size_x(), "depth": deck.get_absolute_size_y(),
-                         "simulated": self._simulated, "rails": worktable.rails_of(deck)},
+                         "simulated": self._simulated, "rails": worktable.rails_of(deck),
+                         # The worktable as PyLabRobot itself reads it (worktable.export_pylabrobot).
+                         "pylabrobot_files": ({part: f for part, f in worktable.pylabrobot_paths(self._path).items()
+                                               if os.path.exists(f)} if self._path else {}),
+                         "pylabrobot_error": self._pylabrobot_error},
                 "labware": labware,
                 "sites": [{"name": holder.name, "label": label, **_box(holder),
                            "holds": holder.children[0].name if holder.children else None,
@@ -367,6 +372,7 @@ class LiquidHandler:
                 raise ValueError(f"'{action}' is not something that can be done to a worktable.")
             self._layout = None
             worktable.save(self._path, self._config)
+            self._export_pylabrobot()  # the layout, and the starting liquids, as PyLabRobot reads them
         self._notify("layout" if structural else "load", name)
         return {"name": name, "restart": structural}
 

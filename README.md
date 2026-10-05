@@ -60,7 +60,21 @@ robot and the IvoryOS Hub can ship the file with an install:
 - `liquids`: what a person put on the worktable before the run. With tracking on (the default),
   an aspirate from a well nobody filled is refused; fill it here or with a `load_liquid` step.
 
-Layout files written for 0.1 still load. In IvoryOS NextGen the Labware panel edits this file:
+Layout files written for 0.1 still load.
+
+Beside it, plr-ivoryos keeps PyLabRobot's own description of the same worktable up to date, so a
+plain PyLabRobot script (or anyone without this package) uses the layout as designed:
+
+```python
+from pylabrobot.resources import Deck
+deck = Deck.load_from_json_file("worktable.pylabrobot.json")      # every labware, sized and placed
+deck.load_state_from_file("worktable.pylabrobot-state.json")      # full tip racks, starting liquids
+```
+
+Those two are written whenever the worktable is loaded or changed, from the file as a run starts
+(not from a deck a run has used tips from). Edit `worktable.json`; the others are output.
+PyLabRobot 0.2.2 cannot read back its own Tecan wash station, so a Tecan worktable gets none (the
+Labware panel says so). In IvoryOS NextGen the Labware panel edits this file:
 place or remove labware from PyLabRobot's catalogue, and on the simulator switch the robot
 (OT-2, STARlet, STAR, EVO) without touching the script.
 

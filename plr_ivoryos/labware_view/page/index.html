@@ -363,6 +363,14 @@
           <span class="kind">each robot keeps its own worktable</span></div>`;
       }
       html += `<p>${rails.length ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware onto an empty slot."} Drag what is there to move it. Click a plate or reservoir to fill its wells. Nothing on the robot moves.</p>`;
+      const deck = (layouts[current] || {}).deck || {};
+      const files = deck.pylabrobot_files || {};
+      if (files.layout) {
+        const link = (part, text) => `<a href="api/pylabrobot?worktable=${encodeURIComponent(current)}&part=${part}" download>${text}</a>`;
+        html += `<p>Also saved as PyLabRobot reads it: ${link("layout", "the layout")} (every labware, placed; <code>Deck.load_from_json_file</code>) and ${link("state", "the starting state")} (full tips and these liquids; <code>deck.load_state_from_file</code>).</p>`;
+      } else if (deck.pylabrobot_error) {
+        html += `<p>Not saved for PyLabRobot: ${esc(deck.pylabrobot_error)}</p>`;
+      }
       html += `<input type="search" id="query" placeholder="Search PyLabRobot labware (e.g. 96 wellplate, tiprack 300)" value="${esc(query)}" style="width:100%"><div id="palette"></div>`;
       $("editor").innerHTML = html;
       renderPalette();

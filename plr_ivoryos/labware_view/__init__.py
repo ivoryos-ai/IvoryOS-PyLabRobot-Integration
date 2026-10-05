@@ -15,7 +15,9 @@ does not import it. Served at /plugins/labware/ (page), /plugins/labware/api/{la
 catalog,edit} and /plugins/labware/events.
 """
 
-from fastapi.responses import JSONResponse
+import os
+
+from fastapi.responses import FileResponse, JSONResponse
 from ivoryos_edge.plugins import Plugin
 
 plugin = Plugin("Labware", id="labware", page="page", placement="panel-right", icon="grid-3x3")
@@ -77,6 +79,17 @@ def get_layout():
 @plugin.router.get("/api/state")
 def get_state():
     return state()
+
+
+@plugin.router.get("/api/pylabrobot")
+def get_pylabrobot(worktable: str, part: str = "layout"):
+    """The worktable in PyLabRobot's own format, as a download: the layout (for
+    `Deck.load_from_json_file`) or the starting state (for `deck.load_state_from_file`)."""
+    found = _worktables().get(worktable)
+    path = (((found or (None, {}))[1].get("deck") or {}).get("pylabrobot_files") or {}).get(part)
+    if not path or not os.path.exists(path):
+        return JSONResponse(status_code=404, content={"error": "There is no PyLabRobot file for this worktable."})
+    return FileResponse(path, media_type="application/json", filename=os.path.basename(path))
 
 
 @plugin.router.get("/api/catalog")
