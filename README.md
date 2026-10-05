@@ -219,9 +219,23 @@ The panel is the only part of this package that imports IvoryOS, and only IvoryO
 | **Plate Reader** | `PlateReader` | `simulated=True` | CLARIOstar, Cytation5 |
 | **Fans** | `Fan` | `simulated=True` | Hamilton HEPA |
 | **Thermocycler** | `Thermocycler` | `simulated=True` | Any PLR-supported TC |
+| **Temperature controller** | `TemperatureController` | `simulated=True` | Inheco CPAC, Opentrons Temperature Module |
+| **Plate sealer** | `Sealer` | `simulated=True` | Azenta a4S |
+| **Plate peeler** | `Peeler` | `simulated=True` | Azenta XPeel |
+| **Tilt module** | `Tilter` | `simulated=True` | Hamilton tilt module |
+| **Barcode scanner** | `BarcodeScanner` | `simulated=True` | Keyence |
 
-The liquid handler in 0.2 has been tested on PyLabRobot's simulator; it has not yet been run on a
-real robot.
+Plate readers also take PyLabRobot's Byonoy Absorbance/Luminescence 96, Tecan Spark and Infinite
+200 PRO, and SpectraMax Gemini EM backends; heater-shakers its QInstruments BioShake.
+
+The liquid handler and the devices new in 0.2 have been tested on PyLabRobot's simulators; they
+have not yet been run on real hardware. Incubators, the PreciseFlex arm, the EL406 plate washer and
+the powder dispenser are in PyLabRobot 0.2.2 but not wrapped here yet.
+
+PyLabRobot 1.0 (in beta) reorganises its devices by vendor and adds many (KBiosystems and Thermo
+ALPS sealers, Agilent PlateLoc, Big Bear shakers, a Sartorius balance, the Opentrons Flex, the
+Hamilton Prep, ...). It also renames labware and resources this package relies on, so 0.2 requires
+PyLabRobot below 1.0; supporting 1.0 is the next release.
 
 ---
 
@@ -262,6 +276,8 @@ stay on the loop that opened it. Steps are therefore ordinary synchronous calls,
   worktable.
 - The worktable is a file you can leave out, with PyLabRobot's own copy written beside it; the
   Labware panel edits it and imports existing layouts. Nimbus and Vantage worktables are new.
+- New devices: `TemperatureController`, `Sealer`, `Peeler`, `Tilter` and `BarcodeScanner`, each
+  with a simulator.
 - `simulated=True` with no layout works again (0.1 placed two plates on one spot).
   `Scale.read_weight` works with PyLabRobot 0.2.2.
 
