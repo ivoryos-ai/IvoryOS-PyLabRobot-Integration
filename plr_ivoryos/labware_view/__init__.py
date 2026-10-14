@@ -3,13 +3,12 @@
     "plugins": ["plr_ivoryos.labware_view:plugin"]                  in a deck file
     ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view.plugin])
 
-It draws whatever an instrument reports through `__ivoryos_labware__` (liquid_handler.py does):
+It draws whatever an instrument reports through `__ivoryos_labware__` (robot.py, for a Flex):
 wells show what they hold, tip racks which tips are left, and the wells a step is working on light
 up while it runs. With "Edit layout" it changes the worktable the way a person changes the real
-one, saved to its worktable file: drag labware from PyLabRobot's catalogue onto a place (or a
-carrier onto the rails), drag what is there to move it, rename or remove it, fill wells with a
-liquid, switch the robot (or, on a real one, its model), or import a layout someone already has.
-Nothing moves.
+one, saved to its worktable file: what is mounted on the robot, drag labware from PyLabRobot's
+catalogue onto a place (or a carrier onto the tracks), drag what is there to move it, rename or
+remove it, fill wells with a liquid, or import a layout someone already has. Nothing moves.
 
 Only IvoryOS NextGen loads this module, and it provides `ivoryos_edge`; the rest of plr-ivoryos
 does not import it. Served at /plugins/labware/ (page), /plugins/labware/api/{layout,state,
@@ -107,7 +106,7 @@ def get_catalog():
 @plugin.router.post("/api/edit")
 def edit(change: dict):
     """Change a worktable: {"worktable", "action", ...} as `__ivoryos_labware_edit__` takes it
-    (liquid_handler.py). `restart` says whether steps only offer the change after the deck
+    (robot.py). `restart` says whether steps only offer the change after the deck
     restarts: labware names are read into the deck's schema once, at startup."""
     found = _worktables().get(str(change.get("worktable")))
     apply = getattr(found[0], "__ivoryos_labware_edit__", None) if found else None

@@ -1,41 +1,42 @@
-"""The worktable as a file: which robot, what sits where, and what was put in it.
+"""The worktable as a file: which robot, what is fitted to it, what sits where, and what was put in it.
 
-This is the `deck_json` the LiquidHandler has always taken, so a layout written for 0.1 still
-loads. One file says everything, so switching robots is choosing (or editing) a file, never a
+One file says everything, so switching robots or pipettes is editing a file, never code or a
 command-line flag:
 
     {
-      "deck_type": "OTDeck",
+      "deck_type": "FlexDeck",
+      "equipment": {"left": "p1000_multi_flex", "right": "p50_single_flex", "gripper": true,
+                    "trash": "A3"},
       "resources": [
-        {"name": "tips_300", "type": "opentrons_96_tiprack_300ul", "slot": 1},
-        {"name": "assay_plate", "type": "cor_96_wellplate_360uL_Fb", "slot": 5}
+        {"name": "tips", "type": "flex_96_tiprack_200ul", "slot": "C1"},
+        {"name": "assay_plate", "type": "cor_96_wellplate_360uL_Fb", "slot": "D2"}
       ],
       "liquids": [{"labware": "reservoir", "wells": "A1", "liquid": "buffer", "volume_ul": 14000}]
     }
 
-- `deck_type` is one of DECKS: OTDeck, STARLetDeck, STARDeck, NimbusDeck, VantageDeck_1.3,
-  EVO100Deck, EVO150Deck, EVO200Deck. Default STARLetDeck.
+- `deck_type` is one of DECKS. Default FlexDeck.
+- `equipment` is what is fitted to the robot (equipment.py): on a Flex, the pipette on each
+  mount, or one 96-channel head, the gripper, and the slot of the trash bin. Each mounted thing
+  becomes an instrument of its own in IvoryOS.
 - Each resource is a PyLabRobot definition (`type`, any name in `pylabrobot.resources`) placed by
-  `slot` (Opentrons), `rails` (Hamilton, Tecan) or `location` ({x, y, z} in mm, as in 0.1).
-  One with no definition name (a custom labware, from an imported PyLabRobot file) is kept as
-  PyLabRobot serialized it, under `serialized`.
-  A carrier lists what it holds in `children`, each with the `site` it sits on.
+  `slot` ("C1" on a Flex, 1 to 11 on an OT-2), `rails` (the track of a carrier on a Hamilton
+  STAR; PyLabRobot 1.0 calls them tracks) or `location` ({x, y, z} in mm). One with no definition
+  name (a custom labware, from an imported PyLabRobot file) is kept as PyLabRobot serialized it,
+  under `serialized`. A carrier lists what it holds in `children`, each with the `site` it sits on.
 - `liquids` is what a person put on the worktable before the run.
-- A `{"name": "trash", "type": "Trash", "site": 3}` child is a trash in a carrier position (a Tecan
-  tip carrier's waste): PyLabRobot discards tips into the resource called "trash".
 - `other_worktables` keeps, per robot, the worktable it had before the robot was switched, so
   switching back loses nothing.
 
 This file is the one a person (or the Hub, or the Labware panel) writes: short, by name. Whenever
-the LiquidHandler loads or saves it, it also writes PyLabRobot's own description of the same
-worktable beside it (`export_pylabrobot`): `worktable.pylabrobot.json`, every resource with its
-size and absolute position, which plain PyLabRobot loads with `Deck.load_from_json_file`, and
-`worktable.pylabrobot-state.json`, full tip racks and the starting liquids, for
-`deck.load_state_from_file`. Those copies are output; edit this one.
+a robot loads or saves it, PyLabRobot's own description of the same worktable is written beside it
+(`export_pylabrobot`): `worktable.pylabrobot.json`, which plain PyLabRobot loads with
+`Deck.load_from_json_file`, and `worktable.pylabrobot-state.json`, full tip racks and the starting
+liquids, for `deck.load_state_from_file`. Those copies are output; edit this one. (PyLabRobot
+1.0.0b1 cannot read its own Flex deck back, so a Flex worktable has no such copy yet.)
 
-IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, change robot) through
-the LiquidHandler, and imports a layout someone already has (`read_layout`): a file like this one,
-a 0.1 layout, or PyLabRobot's own deck file (`deck.save`, `LiquidHandler.save`).
+IvoryOS's Labware view edits this file (place, move, rename, remove, liquids, equipment) through
+the robot, and imports a layout someone already has (`read_layout`): a file like this one, or
+PyLabRobot's own deck file (`deck.save`).
 """
 
 import copy
@@ -46,51 +47,28 @@ import os
 from typing import Any, Dict, List, Optional
 
 import pylabrobot.resources as plr_resources
-from pylabrobot.resources import Carrier, Coordinate, ItemizedResource, Trash
+from pylabrobot.resources import (Carrier, Container, Coordinate, ItemizedResource, Plate, TipRack, Trash,
+                                  TubeRack)
 
 from plr_ivoryos.wells import ALL, expand_wells
 
 FORMAT = "plr-ivoryos-worktable/1"
-DEFAULT_DECK = "STARLetDeck"
+DEFAULT_DECK = "FlexDeck"
 
-# The worktables this can build, and what a person calls them. (PyLabRobot has no 2.0 m Vantage
-# deck yet.)
+# The worktables this can build and read, and what a person calls them. Each is the deck of a robot
+# PyLabRobot 1.0 drives with a class of its own; which of them a plr-ivoryos robot can have is that
+# robot's to say (the Flex: FlexDeck).
 DECKS = {
+    "FlexDeck": "Opentrons Flex",
     "OTDeck": "Opentrons OT-2",
     "STARLetDeck": "Hamilton STARlet",
     "STARDeck": "Hamilton STAR",
-    "NimbusDeck": "Hamilton Nimbus",
-    "VantageDeck_1.3": "Hamilton Vantage 1.3 m",
-    "EVO100Deck": "Tecan EVO 100",
-    "EVO150Deck": "Tecan EVO 150",
-    "EVO200Deck": "Tecan EVO 200",
 }
-# Kinds whose PyLabRobot deck takes an argument.
-_DECK_ARGS = {"VantageDeck_1.3": ("VantageDeck", {"size": 1.3}), "VantageDeck": ("VantageDeck", {"size": 1.3})}
-
-# Which worktables a real robot can have, by its backend's class (the first is the default). The
-# simulator can be any of them. A robot's worktable is fixed by the robot, but within a family a
-# person says which model it is (a STAR or a STARlet, an EVO 100, 150 or 200).
-FAMILIES = {
-    "OpentronsOT2Backend": ["OTDeck"],
-    "STARBackend": ["STARLetDeck", "STARDeck"],
-    "NimbusBackend": ["NimbusDeck"],
-    "VantageBackend": ["VantageDeck_1.3"],
-    "EVOBackend": ["EVO150Deck", "EVO100Deck", "EVO200Deck"],
-}
-
-
-def decks_for(backend) -> List[str]:
-    """The worktables this backend's robot can have: its family, or none for an unknown backend."""
-    for cls in type(backend).__mro__:
-        if cls.__name__ in FAMILIES:
-            return list(FAMILIES[cls.__name__])
-    return []
 
 
 def make_deck(kind: str):
-    factory, kwargs = _DECK_ARGS.get(kind, (kind, {}))
-    return resolve(factory)(**kwargs)
+    return resolve(kind)()
+
 
 _SEARCH = ["pylabrobot.resources", "pylabrobot.resources.hamilton", "pylabrobot.resources.corning",
            "pylabrobot.resources.opentrons", "pylabrobot.resources.thermo_fisher", "pylabrobot.resources.greiner"]
@@ -129,6 +107,24 @@ def _resource_for(entry: dict, size=None):
     return make(entry["type"], entry["name"], size)
 
 
+def is_flex(deck) -> bool:
+    return type(deck).__name__ == "FlexDeck"
+
+
+def slot_of(deck, slot):
+    """A slot as the deck takes it: "C1" on a Flex (and its staging slots A4 to D4), a number on
+    an OT-2."""
+    if is_flex(deck):
+        text = str(slot).strip().upper()
+        if text not in deck.slots:
+            raise ValueError(f"'{slot}' is not a slot on a Flex: they are {', '.join(sorted(deck.slots))}.")
+        return text
+    try:
+        return int(slot)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{slot}' is not a slot number.") from None
+
+
 def _place(deck, entry: dict) -> None:
     resource = _resource_for(entry, entry.get("size"))
     if isinstance(resource, Carrier):
@@ -143,36 +139,43 @@ def _place(deck, entry: dict) -> None:
             resource.assign_child_resource(_resource_for(child),
                                            location=Coordinate(at.get("x", 0), at.get("y", 0), at.get("z", 0)))
     if "slot" in entry:
-        deck.assign_child_at_slot(resource, int(entry["slot"]))
+        deck.assign_child_at_slot(resource, slot_of(deck, entry["slot"]))
     elif "rails" in entry:
-        deck.assign_child_resource(resource, rails=int(entry["rails"]))
+        deck.assign_child_resource(resource, track=int(entry["rails"]))
     else:
         at = entry.get("location") or {}
         deck.assign_child_resource(resource, location=Coordinate(at.get("x", 0), at.get("y", 0), at.get("z", 0)))
 
 
+TRASH = "trash"
+
+
+def place_trash(deck, slot: Optional[str]) -> None:
+    """The Flex's trash bin, in `slot`, as PyLabRobot itself puts it there when a Flex reports one
+    (named "trash", one slot in size). On a real robot its own deck configuration decides where the
+    bin is, and PyLabRobot moves this one there when it connects."""
+    if not slot or not is_flex(deck):
+        return
+    from pylabrobot.resources.opentrons.flex_deck import SLOT_DEPTH, SLOT_WIDTH
+    deck.assign_child_at_slot(Trash(name=TRASH, size_x=SLOT_WIDTH, size_y=SLOT_DEPTH, size_z=82.0),
+                              slot_of(deck, slot))
+
+
 def build_deck(config: dict):
     """The PyLabRobot deck a worktable file describes."""
     deck = make_deck(config.get("deck_type") or DEFAULT_DECK)
+    place_trash(deck, (config.get("equipment") or {}).get("trash"))
     for entry in config.get("resources") or []:
         _place(deck, entry)
     return deck
 
 
-# Millimetres between rails, and where rail 1 is (PyLabRobot: HamiltonSTARDeck.rails_to_location,
-# TecanDeck._coordinate_for_rails before a carrier's own offset).
-_RAIL_PITCH = {"HamiltonSTARDeck": 22.5, "TecanDeck": 25.0}
-
-
 def rails_of(deck) -> List[Dict[str, float]]:
-    """Where each rail of a rail-based worktable is, `[{"rail", "x"}]`; empty for a deck of slots."""
-    count = getattr(deck, "num_rails", None)
-    if not count:
+    """Where each track of a Hamilton worktable is, `[{"rail", "x"}]`; empty for a deck of slots."""
+    count = getattr(deck, "num_tracks", None)
+    if not count or not hasattr(deck, "track_to_location"):
         return []
-    if hasattr(deck, "rails_to_location"):  # Hamilton STAR, STARlet, Nimbus, Vantage
-        return [{"rail": n, "x": round(deck.rails_to_location(n).x, 2)} for n in range(1, count + 1)]
-    pitch = _RAIL_PITCH.get(type(deck).__name__, 25.0)
-    return [{"rail": n, "x": round(100 + (n - 1) * pitch, 2)} for n in range(1, count + 1)]
+    return [{"rail": n, "x": round(deck.track_to_location(n).x, 2)} for n in range(1, count + 1)]
 
 
 def load(path: str) -> dict:
@@ -238,8 +241,8 @@ def export_pylabrobot(config: dict, path: str) -> Optional[str]:
         deck.load_state_from_file("worktable.pylabrobot-state.json")       # tips and volumes
 
     Built fresh from the file (not from a deck a run has used tips from), and checked by reading
-    both back the way PyLabRobot would. Returns why not when it cannot (PyLabRobot 0.2.2 cannot read
-    back its own Tecan wash station), and then leaves no files behind."""
+    both back the way PyLabRobot would. Returns why not when it cannot (PyLabRobot 1.0.0b1 cannot
+    read back its own Flex deck), and then leaves no files behind."""
     from pylabrobot.resources import Deck
     targets = pylabrobot_paths(path)
     scratch = {part: target + ".tmp" for part, target in targets.items()}
@@ -282,46 +285,23 @@ _LIQUIDS = [{"labware": "reservoir", "wells": "A1", "liquid": "buffer", "volume_
             {"labware": "reservoir", "wells": "A2", "liquid": "dye", "volume_ul": 9000}]
 
 STARTERS: Dict[str, dict] = {
-    "OTDeck": {"deck_type": "OTDeck", "resources": [
-        {"name": "tips", "type": "opentrons_96_tiprack_300ul", "slot": 1},
-        {"name": "tips_b", "type": "opentrons_96_tiprack_300ul", "slot": 4},
-        {"name": "reservoir", "type": _RESERVOIR, "slot": 2},
-        {"name": "assay_plate", "type": _PLATE, "slot": 5},
-        {"name": "sample_plate", "type": _PLATE, "slot": 6},
-    ], "liquids": _LIQUIDS},
-    "STARLetDeck": {"deck_type": "STARLetDeck", "resources": [
-        {"name": "tip_carrier", "type": "TIP_CAR_480_A00", "rails": 3, "children": [
-            {"name": "tips", "type": "hamilton_96_tiprack_300uL_filter", "site": 0},
-            {"name": "tips_b", "type": "hamilton_96_tiprack_300uL_filter", "site": 1}]},
-        {"name": "plate_carrier", "type": "PLT_CAR_L5AC_A00", "rails": 15, "children": [
-            {"name": "reservoir", "type": _RESERVOIR, "site": 0},
-            {"name": "assay_plate", "type": _PLATE, "site": 1},
-            {"name": "sample_plate", "type": _PLATE, "site": 2}]},
-    ], "liquids": _LIQUIDS},
+    # Front row within reach of both mounts; the trash bin in its usual place at the back right.
+    "FlexDeck": {"deck_type": "FlexDeck",
+                 "equipment": {"left": "p1000_multi_flex", "right": "p1000_single_flex", "gripper": True,
+                               "trash": "A3"},
+                 "resources": [
+                     {"name": "tips", "type": "flex_96_tiprack_200ul", "slot": "C1"},
+                     {"name": "tips_b", "type": "flex_96_tiprack_200ul", "slot": "B1"},
+                     {"name": "reservoir", "type": _RESERVOIR, "slot": "C2"},
+                     {"name": "assay_plate", "type": _PLATE, "slot": "D2"},
+                     {"name": "sample_plate", "type": _PLATE, "slot": "D3"},
+                 ], "liquids": _LIQUIDS},
 }
-
-
-STARTERS["STARDeck"] = {**copy.deepcopy(STARTERS["STARLetDeck"]), "deck_type": "STARDeck"}
-
-_TECAN = {"resources": [
-    # A Tecan EVO has no trash of its own: the waste position of the tip carrier is it.
-    {"name": "tip_carrier", "type": "DiTi_3Pos___Waste", "rails": 10, "children": [
-        {"name": "tips", "type": "DiTi_200ul_LiHa", "site": 0},
-        {"name": "tips_b", "type": "DiTi_200ul_LiHa", "site": 1},
-        {"name": "trash", "type": "Trash", "site": 3}]},
-    {"name": "plate_carrier", "type": "MP_3Pos", "rails": 17, "children": [
-        {"name": "reservoir", "type": _RESERVOIR, "site": 0},
-        {"name": "assay_plate", "type": _PLATE, "site": 1},
-        {"name": "sample_plate", "type": _PLATE, "site": 2}]},
-], "liquids": _LIQUIDS}
-for _kind in ("EVO100Deck", "EVO150Deck", "EVO200Deck"):
-    STARTERS[_kind] = {"deck_type": _kind, **copy.deepcopy(_TECAN)}
 
 
 def starter(deck_type: str) -> dict:
     """A worktable to start from: two racks of the robot's own tips, a reservoir with buffer and
-    dye, two plates, with the same names on every robot (`tips`, `reservoir`, `assay_plate`, ...)
-    so one workflow runs on any of them. Empty for a deck with no starter."""
+    dye, two plates. Empty for a deck with no starter."""
     if deck_type in STARTERS:
         return copy.deepcopy(STARTERS[deck_type])
     return {"deck_type": deck_type, "resources": [], "liquids": []}
@@ -331,14 +311,26 @@ def starter(deck_type: str) -> dict:
 
 _catalog: Optional[List[Dict[str, str]]] = None
 
-_KINDS = {"Plate": "plate", "TecanPlate": "plate", "TipRack": "tip_rack", "TecanTipRack": "tip_rack",
-          "TubeRack": "tube_rack", "Trough": "reservoir",
-          "PlateCarrier": "carrier", "TipCarrier": "carrier", "TroughCarrier": "carrier", "TubeCarrier": "carrier",
-          "MFXCarrier": "carrier", "TecanPlateCarrier": "carrier", "TecanTipCarrier": "carrier"}
-# Which maker's tips and carriers fit which robot. Plates, reservoirs and tube racks fit any.
-_MAKER = {"OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton", "NimbusDeck": "hamilton",
-          "VantageDeck_1.3": "hamilton", "VantageDeck": "hamilton",
-          "EVO100Deck": "tecan", "EVO150Deck": "tecan", "EVO200Deck": "tecan"}
+# By the class a definition returns, most specific first. PyLabRobot 1.0 has kinds of tip rack
+# (standing, embedded in a holder, nested), so this is read with issubclass, not by class name.
+_KINDS = [(TipRack, "tip_rack"), (TubeRack, "tube_rack"), (Plate, "plate"), (Carrier, "carrier"),
+          (Container, "reservoir")]
+
+
+def _kind_of_class(cls) -> Optional[str]:
+    if not inspect.isclass(cls):
+        return None
+    return next((kind for base, kind in _KINDS if issubclass(cls, base)), None)
+
+
+def _maker(name: str, module: str) -> str:
+    if ".opentrons" in module:
+        return "opentrons_flex" if name.startswith("flex_") else "opentrons"
+    return next((m for m in ("hamilton", "tecan") if f".{m}" in module), "")
+
+
+# Whose tip racks and carriers fit which robot. Plates, reservoirs and tube racks fit any.
+_MAKER = {"FlexDeck": "opentrons_flex", "OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton"}
 
 
 def _all_definitions() -> List[Dict[str, str]]:
@@ -350,20 +342,18 @@ def _all_definitions() -> List[Dict[str, str]]:
             if name.startswith("_") or inspect.isclass(factory) or not callable(factory):
                 continue
             try:
-                signature = inspect.signature(factory)
-                returns = signature.return_annotation
-                kind = _KINDS.get(returns if isinstance(returns, str) else getattr(returns, "__name__", ""))
+                signature = inspect.signature(factory, eval_str=True)
+                kind = _kind_of_class(signature.return_annotation)
                 if not kind or list(signature.parameters)[:1] != ["name"]:
                     continue
                 if "deprecated" in inspect.getsource(factory).lower():
                     continue  # an old spelling kept as an alias of the current one
-            except (TypeError, ValueError, OSError):
+            except Exception:
                 continue
             if kind == "plate" and ("trough" in name.lower() or "reservoir" in name.lower()):
                 kind = "reservoir"
-            module = getattr(factory, "__module__", "") or ""
-            maker = next((m for m in ("opentrons", "hamilton", "tecan") if f".{m}" in module), "")
-            found.append({"definition": name, "category": kind, "maker": maker})
+            found.append({"definition": name, "category": kind,
+                          "maker": _maker(name, getattr(factory, "__module__", "") or "")})
         _catalog = sorted(found, key=lambda entry: (entry["category"], entry["definition"].lower()))
     return _catalog
 
@@ -371,17 +361,18 @@ def _all_definitions() -> List[Dict[str, str]]:
 def catalog(deck_type: Optional[str] = None) -> List[Dict[str, str]]:
     """What PyLabRobot defines that can go on this robot's worktable, by the name `type` takes:
     plates, reservoirs and tube racks from anyone, tip racks and carriers by the robot's maker
-    (carriers only where there are rails to put them on). Read from each definition's return
-    type, so nothing is constructed to find out; an old spelling kept as an alias is left out."""
+    (carriers only where there are tracks to put them on; a Flex takes Flex tip racks only). Read
+    from each definition's return type, so nothing is constructed to find out; an old spelling kept
+    as an alias is left out."""
     maker = _MAKER.get(deck_type or "", "")
-    rails = maker in ("hamilton", "tecan")
+    tracks = maker == "hamilton"
     out = []
     for entry in _all_definitions():
-        if entry["category"] == "carrier" and not (rails and entry["maker"] == maker):
+        if entry["category"] == "carrier" and not (tracks and entry["maker"] == maker):
             continue
         if entry["category"] == "tip_rack" and maker and entry["maker"] != maker:
             continue
-        if entry["category"] == "plate" and entry["maker"] == "tecan" and maker != "tecan":
+        if entry["category"] == "plate" and entry["maker"] == "tecan":
             continue
         out.append({"definition": entry["definition"], "category": entry["category"]})
     return out
@@ -397,13 +388,8 @@ def describe_decks(kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
 def kind_of(deck) -> str:
     """Which of DECKS a PyLabRobot deck is."""
     name = type(deck).__name__
-    rails = getattr(deck, "num_rails", None)
     if name == "HamiltonSTARDeck":
-        return "STARLetDeck" if rails == 32 else "STARDeck"
-    if name == "TecanDeck":
-        return {30: "EVO100Deck", 45: "EVO150Deck", 69: "EVO200Deck"}.get(rails, "EVO150Deck")
-    if name == "VantageDeck":
-        return "VantageDeck_1.3"  # the only size PyLabRobot builds
+        return "STARLetDeck" if getattr(deck, "num_tracks", None) == 30 else "STARDeck"
     if name in DECKS:
         return name
     raise ValueError(f"A {name} is not a worktable this knows ({', '.join(DECKS.values())}).")
@@ -413,8 +399,8 @@ _by_model: Optional[Dict[str, str]] = None
 
 
 def _definition_of(resource) -> Optional[str]:
-    """The definition a resource was made from: PyLabRobot records it as `model` for most (230 of
-    250), and the rest are found by making each definition once and reading its model."""
+    """The definition a resource was made from: PyLabRobot records it as `model` for most, and the
+    rest are found by making each definition once and reading its model."""
     global _by_model
     model = getattr(resource, "model", None)
     if not model:
@@ -447,29 +433,26 @@ def _entry_of(resource, empty_holders: bool = False) -> dict:
 
 
 def _rail_of(deck, carrier) -> Optional[int]:
-    """The rail a carrier sits on, by finding where PyLabRobot would put it on each rail."""
-    for n in range(1, (getattr(deck, "num_rails", None) or 0) + 1):
-        if hasattr(deck, "rails_to_location"):
-            at = deck.rails_to_location(n)
-        elif hasattr(deck, "_coordinate_for_rails"):
-            try:
-                at = deck._coordinate_for_rails(n, carrier)
-            except Exception:
-                return None
-        else:
-            return None
+    """The track a carrier sits on, by finding where PyLabRobot would put it on each track."""
+    for n in range(1, (getattr(deck, "num_tracks", None) or 0) + 1):
+        at = deck.track_to_location(n)
         if abs(at.x - carrier.location.x) < 0.05 and abs(at.y - carrier.location.y) < 0.05:
             return n
     return None
 
 
+def slot_label(holder) -> str:
+    """A slot holder's slot as a person names it: "C1" (flex_deck_slot_C1), "6" (ot2_deck_slot_6)."""
+    return str(holder.name).rsplit("_", 1)[-1]
+
+
 def from_pylabrobot(data: dict) -> dict:
-    """A worktable file from PyLabRobot's own description of a deck (`deck.save(...)`, or a whole
-    `LiquidHandler.save(...)`): each labware by its definition name where PyLabRobot recorded one,
-    otherwise kept exactly as serialized; slots, rails and carrier positions as they were."""
+    """A worktable file from PyLabRobot's own description of a deck (`deck.save(...)`): each
+    labware by its definition name where PyLabRobot recorded one, otherwise kept exactly as
+    serialized; slots, tracks and carrier positions as they were."""
     from pylabrobot.resources import Deck, ResourceHolder
-    if data.get("type") == "LiquidHandler":
-        data = next((c for c in data.get("children") or [] if c.get("category") == "deck"), None) or {}
+    if data.get("category") != "deck":
+        data = next((c for c in data.get("children") or [] if c.get("category") == "deck"), None) or data
     try:
         deck = Deck.deserialize(data)
     except Exception as e:
@@ -479,11 +462,15 @@ def from_pylabrobot(data: dict) -> dict:
     config: Dict[str, Any] = {"deck_type": kind, "resources": [], "liquids": []}
     for child in deck.children:
         if child.name in native and not (isinstance(child, ResourceHolder) and child.children):
-            continue  # the deck's own trash, waste block, wash station, empty slots
-        if isinstance(child, ResourceHolder):  # an Opentrons slot
+            continue  # the deck's own trash, waste block, empty slots
+        if isinstance(child, ResourceHolder):  # a slot
             if child.children and child.children[0].name not in native:
-                slot = int(str(child.name).rsplit("_", 1)[-1])
-                config["resources"].append({**_entry_of(child.children[0]), "slot": slot})
+                if isinstance(child.children[0], Trash) and kind == "FlexDeck":
+                    config.setdefault("equipment", {})["trash"] = slot_label(child)
+                    continue
+                slot = slot_label(child)
+                config["resources"].append({**_entry_of(child.children[0]),
+                                            "slot": slot if kind == "FlexDeck" else int(slot)})
             continue
         if isinstance(child, Carrier):
             entry = _entry_of(child, empty_holders=True)
@@ -499,11 +486,10 @@ def from_pylabrobot(data: dict) -> dict:
 
 
 def read_layout(text: str) -> dict:
-    """A layout someone already has, as a worktable: this package's file (or a 0.1 layout), or
-    PyLabRobot's own (`deck.save`, `LiquidHandler.save`). Checked by building it."""
-    import json as _json
+    """A layout someone already has, as a worktable: this package's file, or PyLabRobot's own
+    (`deck.save`). Checked by building it."""
     try:
-        data = _json.loads(text)
+        data = json.loads(text)
     except ValueError as e:
         raise ValueError(f"This is not a JSON layout ({e}).") from None
     if not isinstance(data, dict):
@@ -517,7 +503,7 @@ def read_layout(text: str) -> dict:
         raise ValueError("This is a PyLabRobot state file (tips and volumes); import the layout file beside it.")
     else:
         raise ValueError("This is neither a worktable file nor a PyLabRobot deck file.")
-    if config.get("deck_type", DEFAULT_DECK) not in (*DECKS, "VantageDeck"):
+    if config.get("deck_type", DEFAULT_DECK) not in DECKS:
         raise ValueError(f"'{config.get('deck_type')}' is not a worktable this knows ({', '.join(DECKS)}).")
     build_deck(config)  # every definition exists and everything fits, or say what does not
     return config

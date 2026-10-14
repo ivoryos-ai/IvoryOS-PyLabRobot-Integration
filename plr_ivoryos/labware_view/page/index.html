@@ -211,14 +211,19 @@
       $("edit").textContent = editing ? "Done" : "Edit layout";
       renderNotes();
       if (!current || !layouts[current]) {
-        $("stage").innerHTML = `<div class="empty">No instrument on this deck reports a worktable.<br>A plr-ivoryos LiquidHandler does.</div>`;
+        $("stage").innerHTML = `<div class="empty">No instrument on this deck reports a worktable.<br>A plr-ivoryos robot (an Opentrons Flex) does.</div>`;
         $("kind").textContent = "";
         $("legend").innerHTML = $("list").innerHTML = $("fill").innerHTML = "";
         return;
       }
       const layout = layouts[current], state = (states[current] || {}).labware || {};
       $("title").textContent = current;
-      $("kind").textContent = (layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : "");
+      // What is mounted (a Flex): each one is an instrument of its own.
+      const fitted = layout.deck.equipment || {}, fittedLabels = fitted.labels || {};
+      const mounted = ["left", "right", "head96"].filter(k => fitted[k]).map(k => `${k}: ${fittedLabels[k] || fitted[k]}`);
+      if (fitted.gripper) mounted.push("gripper");
+      $("kind").textContent = (layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : "")
+        + (mounted.length ? " · " + mounted.join(", ") : "");
       if (zoomed && !layout.labware[zoomed]) zoomed = null;
 
       // Millimetres from the front left; the page's y runs the other way. The frame is the whole
@@ -373,8 +378,21 @@
         html += `<div class="row"><label for="deck">${simulated ? "Robot" : "Model"}</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select>
           <span class="kind">each keeps its own worktable</span></div>`;
       }
+      if (offered.equipment) {
+        // What is fitted to the robot. Each mounted pipette and the gripper is an instrument of its
+        // own in IvoryOS, so a change is offered to steps after the deck restarts.
+        const eq = offered.equipment, now = eq.current || {};
+        const choose = (key, pipettes) => `<select id="eq-${key}" data-equipment="${key}"><option value="none">nothing</option>${
+          pipettes.map(p => `<option value="${esc(p.name)}" ${p.name === now[key] ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select>`;
+        const mounts = eq.pipettes.filter(p => p.channels !== 96), heads = eq.pipettes.filter(p => p.channels === 96);
+        html += `<div class="row"><label for="eq-left">Left</label>${choose("left", mounts)}<label for="eq-right">Right</label>${choose("right", mounts)}</div>
+          <div class="row"><label for="eq-head96">96-channel</label>${choose("head96", heads)}
+          <label><input type="checkbox" id="eq-gripper" data-equipment="gripper" ${now.gripper ? "checked" : ""}> Gripper</label>
+          <label for="eq-trash">Trash bin</label><select id="eq-trash" data-equipment="trash">${eq.trash.map(slot => `<option ${slot === now.trash ? "selected" : ""}>${esc(slot)}</option>`).join("")}<option value="none" ${now.trash ? "" : "selected"}>none</option></select></div>
+          <p class="kind">Each pipette and the gripper is an instrument of its own (<code>${esc(current)}_left</code>, <code>${esc(current)}_gripper</code>, …); a change reaches steps after a restart.</p>`;
+      }
       if (offered.importable) {
-        // A layout someone already has: this package's file, a 0.1 layout, or PyLabRobot's own.
+        // A layout someone already has: this package's file, or PyLabRobot's own.
         html += `<div class="row"><button class="plain" id="import">Import a layout…</button><input type="file" id="importfile" accept=".json,application/json" hidden>
           <span class="kind">a worktable file, or PyLabRobot's own (<code>deck.save</code>)</span></div>`;
       }
@@ -635,6 +653,10 @@
     });
     document.addEventListener("change", evt => {
       if (evt.target.id === "deck") { zoomed = null; picked = new Set(); applyEdit({ action: "deck", deck: evt.target.value }); }
+      if (evt.target.dataset && evt.target.dataset.equipment) {
+        const key = evt.target.dataset.equipment;
+        applyEdit({ action: "equipment", [key]: evt.target.type === "checkbox" ? evt.target.checked : evt.target.value });
+      }
       if (evt.target.id === "importfile" && evt.target.files.length) {
         const file = evt.target.files[0];
         file.text().then(content => {
