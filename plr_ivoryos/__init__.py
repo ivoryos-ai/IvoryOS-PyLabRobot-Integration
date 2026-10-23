@@ -1,68 +1,29 @@
 """
 plr_ivoryos
 ============
-IvoryOS-compatible wrappers for PyLabRobot lab automation devices.
+PyLabRobot 1.0 devices in IvoryOS, with PyLabRobot's own steps.
 
 Supported devices
 -----------------
-LiquidHandler (Hamilton STAR, Opentrons OT-2, Tecan EVO, Chatterbox simulator)
-    LiquidHandler  — steps that take labware names and well selections, on a worktable
-                     described by a file (worktable.py)
+Opentrons Flex (plr_ivoryos.opentrons.Flex)
+    The robot is an instrument, and each thing mounted on it is one too: the pipette on each
+    mount (FlexPipette1, FlexPipette8), the 96-channel head (FlexPipette96) and the gripper
+    (FlexGripperPart), with the steps PyLabRobot gives each. What is mounted, and what sits where
+    on the deck, is the worktable file (worktable.py). `simulated=True` runs PyLabRobot's Flex
+    against a simulated robot (opentrons/simulator.py).
 
-Scale (MettlerToledo, etc.)
-    Scale
-
-Pump (Cole-Parmer Masterflex, etc.)
-    Pump
-
-HeaterShaker (Inheco ThermoShake, etc.)
-    HeaterShaker
-
-Centrifuge (VSpin, etc.)
-    Centrifuge
-
-PlateReader (CLARIOstar, Cytation5, etc.)
-    PlateReader
-
-Fan (Hamilton HEPA, etc.)
-    Fan
-
-Thermocycler
-    Thermocycler
-TemperatureController (Inheco CPAC, Opentrons Temperature Module)
-    TemperatureController
-Sealer (Azenta a4S)
-    Sealer
-Peeler (Azenta XPeel)
-    Peeler
-Tilter (Hamilton tilt module)
-    Tilter
-BarcodeScanner (Keyence)
-    BarcodeScanner
+How a PyLabRobot method becomes a step (wells as `plate[A1:H1]` text, labware by name) is
+bridge.py; the worktable, the Labware view's hooks and running a step are robot.py, and the Labware
+view itself is labware_view (an IvoryOS NextGen plugin).
 """
 
-from plr_ivoryos.liquid_handler import LiquidHandler
 from plr_ivoryos.wells import Labware, PerWell, Site, WellSelection, Wells, expand_wells
 from plr_ivoryos import worktable
-from plr_ivoryos.simple import (
-    Scale,
-    Pump,
-    HeaterShaker,
-    Centrifuge,
-    PlateReader,
-    Fan,
-    Thermocycler,
-    TemperatureController,
-    Sealer,
-    Peeler,
-    Tilter,
-    BarcodeScanner,
-    SimulatedScaleBackend,
-)
+from plr_ivoryos.opentrons import Flex
 from plr_ivoryos.async_bridge import run_async, shutdown as shutdown_async
 
 __all__ = [
-    "LiquidHandler",
+    "Flex",
     "Labware",
     "Wells",
     "PerWell",
@@ -70,21 +31,8 @@ __all__ = [
     "WellSelection",
     "expand_wells",
     "worktable",
-    "Scale",
-    "Pump",
-    "HeaterShaker",
-    "Centrifuge",
-    "PlateReader",
-    "Fan",
-    "Thermocycler",
-    "TemperatureController",
-    "Sealer",
-    "Peeler",
-    "Tilter",
-    "BarcodeScanner",
-    "SimulatedScaleBackend",
     "run_async",
     "shutdown_async",
 ]
 
-__version__ = "0.2.0"
+__version__ = "1.0.0b1"

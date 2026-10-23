@@ -7,7 +7,7 @@ nothing from IvoryOS:
   to that parameter's entry in the schema: `Labware("plate")` makes the argument a choice among
   the plates on the worktable, `Wells("plate")` makes it wells picked on a plate (the plate is
   chosen in the same picker), and `PerWell("targets")` makes it one value per well.
-* Methods named `__ivoryos_labware__` and friends on the driver (see liquid_handler.py), which
+* Methods named `__ivoryos_labware__` and friends on the driver (see robot.py), which
   report the worktable. Dunder names, so they are never offered as steps.
 
 The original IvoryOS reads `Annotated[str, ...]` as `str`, so there these are plain text fields.
