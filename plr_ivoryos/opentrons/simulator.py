@@ -11,15 +11,17 @@ against PyLabRobot, though not against the robot's own motion planning.
 What it answers: health, instruments, deck configuration (the trash bin), modules (none), runs, run
 actions, labware definitions and commands. Commands succeed at once; `loadPipette` and `loadLabware`
 hand out ids, the tip sensor reports what was picked up and dropped, and a position query answers a
-fixed position. `log` keeps every command, for tests.
+fixed position. A pickup from spots holding no tip leaves the sensor reading absent, which is what
+fails it on a robot. `log` keeps every command, for tests.
 """
 
 import asyncio
 import itertools
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from pylabrobot.io.http import HTTP, HTTPError
+from pylabrobot.resources.errors import NoTipError, ResourceNotFoundError
 
 # The Flex pipettes, by the name the robot reports (`instrumentName`): the model it reports for the
 # simulator, channels, and volume range (µL). The models are ones PyLabRobot has default flow rates for.
@@ -41,6 +43,16 @@ FLEX_PIPETTES: Dict[str, Dict[str, Any]] = {
 API_VERSION = "8.4.0"  # recent enough for every command PyLabRobot sends (robot/* needs 8.2.0)
 
 
+def _holds_a_tip(spot) -> bool:
+    """Whether a spot held a tip before this pickup. PyLabRobot has already staged taking the tip
+    when the command arrives, and `get_tip` is what still reads it, as PyLabRobot's own pickup does."""
+    try:
+        spot.tracker.get_tip()
+    except NoTipError:
+        return False
+    return True
+
+
 class SimulatedFlexServer(HTTP):
     """The robot-server of a Flex with these pipettes mounted.
 
@@ -49,10 +61,13 @@ class SimulatedFlexServer(HTTP):
         gripper  whether the gripper is fitted
         trash    the slot of the trash bin, or None
         delay_s  how long each command takes, so a run can be watched
+        labware  finds labware on the worktable by name, so a pickup can tell a used spot from a full
+                 one. Without it every pickup finds a tip.
     """
 
     def __init__(self, mounts: Dict[str, str], gripper: bool = True, trash: Optional[str] = "A3",
-                 delay_s: float = 0.0, name: str = "simulated-flex"):
+                 delay_s: float = 0.0, name: str = "simulated-flex",
+                 labware: Optional[Callable[[str], Any]] = None):
         super().__init__("Simulated Opentrons Flex", "http://simulated-flex", timeout=30)
         unknown = [p for p in mounts.values() if p not in FLEX_PIPETTES]
         if unknown:
@@ -62,6 +77,7 @@ class SimulatedFlexServer(HTTP):
         self.trash = trash
         self.delay_s = float(delay_s)
         self.name = name
+        self.labware = labware
         self._ids = itertools.count(1)
         self.runs: Dict[str, dict] = {}
         self.log: List[dict] = []
@@ -150,11 +166,16 @@ class SimulatedFlexServer(HTTP):
         """(status, result, error) for one command."""
         tips = run["tips"]
         if command_type == "loadPipette":
-            return "succeeded", {"pipetteId": self._id("pipette")}, None
+            pipette_id = self._id("pipette")
+            run.setdefault("pipettes", {})[pipette_id] = params.get("pipetteName")
+            return "succeeded", {"pipetteId": pipette_id}, None
         if command_type == "loadLabware":
-            return "succeeded", {"labwareId": params.get("labwareId") or self._id("labware")}, None
+            labware_id = params.get("labwareId") or self._id("labware")
+            run.setdefault("labware", {})[labware_id] = params.get("displayName")
+            return "succeeded", {"labwareId": labware_id}, None
         if command_type == "pickUpTip":
-            tips[params.get("pipetteId")] = True
+            pipette = params.get("pipetteId")
+            tips[pipette] = bool(tips.get(pipette)) or self._finds_a_tip(run, params)
         elif command_type in ("dropTip", "dropTipInPlace", "unsafe/dropTipInPlace"):
             tips[params.get("pipetteId")] = False
         elif command_type == "getTipPresence":
@@ -173,3 +194,32 @@ class SimulatedFlexServer(HTTP):
         elif command_type and command_type.startswith("robot/move"):
             return "succeeded", {"position": dict(params.get("axis_map") or {})}, None
         return "succeeded", {}, None
+
+    def _finds_a_tip(self, run: dict, params: dict) -> bool:
+        """Whether the nozzles of a pickup come down on at least one tip: what a robot's sensor reads
+        after it. PyLabRobot skips spots it knows are empty and sends an 8- or 96-channel pickup
+        anyway, so this reading is what fails a pickup from a used column, as on hardware.
+
+        Asked of PyLabRobot's own record of the rack, not kept here, so a rack swapped on the
+        worktable is a full rack at once. Anything unknown finds a tip, and a partial column is read
+        as its whole column, so this can pass a pickup the robot would fail, but never fails one the
+        robot would pass."""
+        name = run.get("labware", {}).get(params.get("labwareId"))
+        well = params.get("wellName")
+        if self.labware is None or not name or not well:
+            return True
+        try:
+            rack = self.labware(name)
+        except ResourceNotFoundError:
+            return True
+        pipette = run.get("pipettes", {}).get(params.get("pipetteId"))
+        channels = FLEX_PIPETTES.get(pipette, {}).get("channels")
+        if channels == 1:
+            spots = [rack.get_item(well)]
+        elif channels == 8:
+            spots = rack.column(int(well[1:]) - 1)
+        elif channels == 96:
+            spots = rack.get_all_items()
+        else:
+            return True
+        return any(_holds_a_tip(spot) for spot in spots)

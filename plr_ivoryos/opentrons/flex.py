@@ -83,7 +83,8 @@ class Flex(WorktableRobot):
 
     host / port    the robot on the network (port 31950)
     serial_port    or its USB-B port instead (needs plr-ivoryos[serial])
-    simulated      run against a simulated robot (simulator.py)
+    simulated      run against a simulated robot (simulator.py). A host or serial_port beside it is
+                   refused: it would be ignored, and a run would look like one on that robot.
     worktable      the worktable file (worktable.py). Optional: it defaults to worktable.json in the
                    deck's data folder. A file that does not exist yet starts the worktable (a
                    ready-made one, simulated; an empty one on a real robot) and is written on the
@@ -105,6 +106,9 @@ class Flex(WorktableRobot):
                  command_timeout: float = 30.0, tracking: bool = True):
         if not simulated and not host and not serial_port:
             raise ValueError("Give the Flex's host (or serial_port), or simulated=True.")
+        if simulated and (host or serial_port):
+            raise ValueError("simulated=True runs no robot, so a host or serial_port beside it would be ignored. "
+                             "Turn simulated off to use that robot, or leave them out to simulate.")
         super().__init__(worktable, "FlexDeck", simulated, step_delay_s, tracking)
         self._host, self._port, self._serial_port = host, int(port), serial_port
         self._command_timeout = float(command_timeout)
@@ -144,7 +148,8 @@ class Flex(WorktableRobot):
             if "head96" in equipment:
                 mounts = {"left": equipment["head96"]}
             server = SimulatedFlexServer(mounts, gripper=equipment.get("gripper", False),
-                                         trash=equipment.get("trash"))
+                                         trash=equipment.get("trash"),
+                                         labware=lambda name: self.deck.get_resource(name))
             return PLRFlex(host="simulated-flex", deck=self.deck, io=server, command_timeout=self._command_timeout,
                            command_poll_interval=0)
         if self._serial_port:

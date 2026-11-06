@@ -81,6 +81,56 @@ def test_the_tip_sensor_reads_what_was_picked_up_and_dropped():
     assert server._execute(run, "verifyTipPresence", {"pipetteId": "p", "expectedState": "absent"})[0] == "failed"
 
 
+@pytest.mark.parametrize("given", [{"host": "10.0.0.5"}, {"serial_port": "COM3"}])
+def test_a_robot_named_beside_simulated_is_refused_not_ignored(given):
+    with pytest.raises(ValueError, match="simulated=True runs no robot"):
+        Flex(simulated=True, **given)
+
+
+def test_the_default_port_and_empty_fields_a_form_sends_still_simulate():
+    robot = Flex(simulated=True, host="", serial_port="", port=31950)
+    assert list(robot.__ivoryos_instruments__()) == ["left", "right", "gripper"]
+
+
+def test_a_used_column_fails_at_the_pickup_and_the_next_column_still_works(flex):
+    left = flex.__ivoryos_instruments__()["left"]
+    left.pick_up_tips("tips[A1:H1]")
+    left.discard_tips()
+    with pytest.raises(RuntimeError, match="Tip pickup not detected"):
+        left.pick_up_tips("tips[A1:H1]")
+    assert left.has_tip_on_hardware() is False
+    left.pick_up_tips("tips[A2:H2]")
+    assert all(left.get_mounted_tips())
+
+
+def test_a_column_with_some_tips_left_is_picked_up_by_what_is_there(flex):
+    parts = flex.__ivoryos_instruments__()
+    parts["right"].pick_up_tips("tips[A1]")
+    parts["right"].discard_tips()
+    parts["left"].pick_up_tips("tips[A1:H1]")
+    mounted = parts["left"].get_mounted_tips()
+    assert mounted[0] is None and all(mounted[1:])
+
+
+def test_a_96_channel_head_finds_no_tips_in_a_used_rack(data_folder):
+    robot = Flex(simulated=True, worktable=write(data_folder, {**FILE, "equipment": {"head96": "p200_96", "trash": "A3"}}))
+    head = robot.__ivoryos_instruments__()["head96"]
+    head.pick_up_tips("tips")
+    head.discard_tips()
+    with pytest.raises(RuntimeError, match="Tip pickup not detected"):
+        head.pick_up_tips("tips")
+
+
+def test_a_rack_swapped_on_the_worktable_is_full_at_once(flex):
+    left = flex.__ivoryos_instruments__()["left"]
+    left.pick_up_tips("tips[A1:H1]")
+    left.discard_tips()
+    flex.__ivoryos_labware_edit__("remove", name="tips")
+    flex.__ivoryos_labware_edit__("place", definition="flex_96_tiprack_200ul", site="C1", name="tips")
+    left.pick_up_tips("tips[A1:H1]")
+    assert all(left.get_mounted_tips())
+
+
 # --- what is mounted ------------------------------------------------------------------------------------
 
 def test_each_mounted_thing_is_an_instrument_of_the_class_its_channels_say(flex):

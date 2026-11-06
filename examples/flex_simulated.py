@@ -1,6 +1,6 @@
 """A simulated Opentrons Flex in IvoryOS NextGen, through PyLabRobot 1.0.
 
-    pip install plr-ivoryos ivoryos-edge
+    pip install plr-ivoryos==1.0.0b1 ivoryos-edge
     python examples/flex_simulated.py
 
 PyLabRobot's own Flex runs against a simulated robot (plr_ivoryos.opentrons.simulator), so tips,

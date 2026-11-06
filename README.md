@@ -21,6 +21,10 @@ NextGen the Labware panel shows it live and lets you build it by dragging.
 > package calls, so each beta here is pinned to exactly one of PyLabRobot's. PyLabRobot's older
 > `LiquidHandler` (now `pylabrobot.legacy`) is not used: robots that PyLabRobot 1.0 only drives
 > through it (Nimbus, Vantage, Tecan EVO) are not supported here.
+>
+> **No real Flex has been run through this package yet**, only the simulator below. PyLabRobot
+> 1.0.0b1 itself warns that 20 `FlexHead96` operations and `FlexHead1.aspirate` and `.dispense` have
+> "not been tested on hardware". `FlexHead8` carries no such warning, so it is the place to start.
 
 ---
 
@@ -81,6 +85,10 @@ rate on a 200 µL tip; columns are counted from 0. Its error is what the step re
 discovers what is mounted, uploads labware and sends every command a real run would, with its own
 tip and volume tracking and its own refusals. What it does not check is the robot's own motion
 planning. PyLabRobot 1.0.0b1 has no Flex simulator of its own.
+
+A `host` or `serial_port` beside `simulated=True` is refused: it would be ignored, and a run would
+look like one on that robot. A pickup from spots holding no tip leaves the tip sensor reading
+absent, so the step fails there, as the sensor on a robot makes it.
 
 ---
 
@@ -188,9 +196,13 @@ only IvoryOS NextGen loads it.
 ## Installation
 
 ```bash
-pip install --pre plr-ivoryos            # 1.0.0b1, with PyLabRobot 1.0.0b1
-pip install --pre "plr-ivoryos[serial]"  # a Flex over USB
+pip install plr-ivoryos==1.0.0b1            # with PyLabRobot 1.0.0b1
+pip install "plr-ivoryos[serial]==1.0.0b1"  # a Flex over USB
 ```
+
+Name the version: plain `pip install plr-ivoryos` installs 0.2.0, which has no Flex, and `--pre`
+lets every other dependency be a pre-release too. uv takes a pre-release only for a package named
+in the command, so name PyLabRobot as well: `uv pip install plr-ivoryos==1.0.0b1 pylabrobot==1.0.0b1`.
 
 Python 3.10 or newer. A Python environment holds one PyLabRobot, so every deck sharing one (the
 IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
