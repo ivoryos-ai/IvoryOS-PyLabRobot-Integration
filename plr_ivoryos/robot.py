@@ -13,6 +13,7 @@ it gets labware choices and well pickers while the worktable is drawn once.
 """
 
 import asyncio
+import copy
 import inspect
 import os
 import re
@@ -68,6 +69,16 @@ def worktable_path(path: Optional[str]) -> str:
     return found
 
 
+def layouts_path(folder: Optional[str], worktable_file: str) -> str:
+    """Where layouts saved by name go: beside the worktable file (worktable.layouts/) unless a
+    folder is given, which is how several decks share one, or how it is kept in a repository. A
+    relative folder is in the data folder, like the worktable file."""
+    if not folder:
+        return worktable.layouts_folder(worktable_file)
+    base = os.environ.get("IVORYOS_DATA_DIR") or os.environ.get("IVORYOS_EDGE_HOME") or os.getcwd()
+    return os.path.abspath(folder if os.path.isabs(folder) else os.path.join(base, folder))
+
+
 def _a(word: str) -> str:
     return "an" if word[:1].upper() in "AEIOU" else "a"
 
@@ -79,12 +90,15 @@ class WorktableRobot:
     KINDS: List[str] = []
 
     def __init__(self, worktable_file: Optional[str] = None, deck_type: Optional[str] = None,
-                 simulated: bool = False, step_delay_s: float = 0.0, tracking: bool = True):
+                 simulated: bool = False, step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         if tracking:
             set_tip_tracking(True)
             set_volume_tracking(True)
         self._simulated = bool(simulated)
         self._path = worktable_path(worktable_file)
+        self._layouts = layouts_path(layouts_folder, self._path)
+        self._started_with: Optional[tuple] = None
         kind = deck_type or self.KINDS[0]
         if deck_type and deck_type not in self.KINDS:
             raise ValueError(f"This robot takes {self._kinds_text()} worktable, not '{deck_type}'.")
@@ -116,6 +130,23 @@ class WorktableRobot:
                   "written there on the first change.")
         elif self._config is not None:
             self._export_pylabrobot()
+        self._started_with = self._steps_read()
+
+    def _steps_read(self) -> tuple:
+        """What IvoryOS reads into the deck's steps once, when it starts: the labware names (and
+        what kind each is), the places labware can sit, and the instruments the robot is split
+        into. A change to any of these reaches steps only after a restart; nothing else needs one
+        (where a plate sits, what is in it and which plate a name stands for are read as they are)."""
+        labware = sorted((name, category_of(resource))
+                         for name, resource in self._labware_map(with_trash=True).items())
+        return labware, sorted(self._site_map()), self._parts_read()
+
+    def _parts_read(self) -> Any:
+        """What the robot's instruments were made from (a subclass's equipment)."""
+        return None
+
+    def _restart_needed(self) -> bool:
+        return self._started_with is not None and self._steps_read() != self._started_with
 
     def _label(self) -> str:
         kind = self._config.get("deck_type") or self.KINDS[0]
@@ -256,6 +287,7 @@ class WorktableRobot:
                          "pylabrobot_files": {part: f for part, f in worktable.pylabrobot_paths(self._path).items()
                                               if os.path.exists(f)},
                          "pylabrobot_error": self._pylabrobot_error,
+                         "layout": self._layout_status(), "restart_needed": self._restart_needed(),
                          **self._deck_extras()},
                 "labware": labware,
                 "sites": [{"name": holder.name, "label": label, **_box(holder),
@@ -488,6 +520,9 @@ class WorktableRobot:
             "decks": worktable.describe_decks(self.KINDS) if len(self.KINDS) > 1 else [],
             "deck": kind,
             "importable": True,
+            "layouts": {"folder": self._layouts,
+                        "saved": [entry["name"] for entry in worktable.saved_layouts(self._layouts)
+                                  if entry["deck_type"] is None or entry["deck_type"] in self.KINDS]},
             **self._catalog_extras(),
         }
 
@@ -508,10 +543,23 @@ class WorktableRobot:
                        kept beside it as worktable.before-import.json (`kept`)
             equipment  what is fitted to the robot (the subclass says what)
 
-        Saved to the worktable file at once. Returns {"restart": True} when steps only offer the
-        change after a restart (labware names, and the instruments a robot is split into, are read
-        once at startup). Raises ValueError for what cannot be done."""
-        structural = action != "liquid"
+        and its layouts saved by name (worktable.py), each a file in the layouts folder:
+
+            save_layout    name optional: save the layout in use, as the saved layout it came from
+                           or under a new name; replace: over another layout already called that
+            use_layout     name: switch to a saved layout. Refused while the one in use has changes
+                           that are not saved, unless discard
+            revert         go back to the saved layout this one came from, as it was saved
+            delete_layout  name optional: delete a saved layout; the worktable stays as it is
+
+        Saved to the worktable file at once. Returns {"restart": True} while steps do not offer the
+        worktable as it now is (labware names, and the instruments a robot is split into, are read
+        once at startup; going back to what the deck started with needs no restart). Raises
+        ValueError for what cannot be done."""
+        target = self._layout_to_use(action, change) if action in ("use_layout", "revert") else None
+        # Going back to a saved layout that differs only in its liquids is a change of liquids.
+        structural = action not in ("liquid", "save_layout", "delete_layout") and not (
+            target is not None and worktable.fingerprint(target)["layout"] == self._fingerprint()["layout"])
         if structural and self._any_tips():
             raise ValueError("Tips are on a head: drop them before changing the worktable.")
         if structural and self._ready:
@@ -539,12 +587,18 @@ class WorktableRobot:
                 name = self._edit_import(str(change.get("content") or ""), str(change.get("filename") or "the file"))
             elif action == "equipment":
                 name = self._edit_equipment({k: v for k, v in change.items()})
+            elif target is not None:
+                name = self._edit_use_layout(target, structural)
+            elif action == "save_layout":
+                name = self._edit_save_layout(str(change.get("name") or ""), bool(change.get("replace")))
+            elif action == "delete_layout":
+                name = self._edit_delete_layout(str(change.get("name") or ""))
             else:
                 raise ValueError(f"'{action}' is not something that can be done to a worktable.")
             self._invalidate()
             self._save()
-        self._notify("layout" if structural else "load", name)
-        return {"name": name, "restart": structural, **({"kept": self._kept} if self._kept else {})}
+        self._notify("load" if action == "liquid" else "layout", name)
+        return {"name": name, "restart": self._restart_needed(), **({"kept": self._kept} if self._kept else {})}
 
     def _restart_session(self) -> None:
         """End the session, so the next step starts a fresh one."""
@@ -784,10 +838,8 @@ class WorktableRobot:
     def _edit_import(self, content: str, filename: str) -> str:
         if not content.strip():
             raise ValueError("The file is empty.")
-        config = worktable.read_layout(content)
-        kind = config.get("deck_type") or self.KINDS[0]
-        self._check_kind(kind)
-        config.setdefault("equipment", self._config.get("equipment"))
+        config = self._fitted(worktable.read_layout(content))
+        kind = config["deck_type"]
         if self._config.get("other_worktables"):
             config["other_worktables"] = self._config["other_worktables"]
         if os.path.exists(self._path):
@@ -795,6 +847,124 @@ class WorktableRobot:
             worktable.save(self._kept, self._config)
         self._rebuild(config)
         return kind
+
+    def _fitted(self, config: dict) -> dict:
+        """A layout from elsewhere, as this robot takes it: one of its worktables, with what is
+        fitted to the robot staying as it is when the layout does not say."""
+        config.setdefault("deck_type", self.KINDS[0])
+        self._check_kind(config["deck_type"])
+        if not config.get("equipment") and self._config.get("equipment"):
+            config["equipment"] = copy.deepcopy(self._config["equipment"])
+        return self._checked(config)
+
+    def _checked(self, config: dict) -> dict:
+        """A subclass checks what only it knows (a Flex: its equipment). Raises ValueError."""
+        return config
+
+    # --- layouts saved by name (worktable.py) -----------------------------------------------------
+
+    def _fingerprint(self) -> Dict[str, str]:
+        return worktable.fingerprint(self._config)
+
+    def _layout_status(self) -> dict:
+        """Which saved layout the worktable in use came from, and whether it still is that layout:
+        {"name", "saved" (that layout is still in the folder), "changed": {"layout", "liquids"}}.
+        A name of None is a worktable that was never saved under one."""
+        name = self._config.get(worktable.BASED_ON)
+        now = self._fingerprint()
+        status = {"name": name, "saved": False, "changed": {"layout": False, "liquids": False}}
+        if not name:
+            return status
+        try:
+            then = worktable.fingerprint(self._fitted(worktable.read_saved(self._layouts, name)))
+        except (ValueError, OSError):
+            return status  # deleted, or no longer a layout this robot can have
+        status.update(saved=True, changed={part: now[part] != then[part] for part in ("layout", "liquids")})
+        return status
+
+    def _unsaved(self) -> bool:
+        """Whether switching away would lose something: changes since the layout was saved, or a
+        worktable with labware on it that was never saved."""
+        status = self._layout_status()
+        if status["saved"]:
+            return any(status["changed"].values())
+        return bool(self._config.get("resources"))
+
+    def _layout_to_use(self, action: str, change: dict) -> dict:
+        """The saved layout a switch or a revert goes to, ready to be the worktable."""
+        current = self._config.get(worktable.BASED_ON)
+        if action == "revert":
+            if not current:
+                raise ValueError("This worktable was not saved as a layout, so there is nothing to go back to.")
+            name = current
+        else:
+            name = worktable.layout_name(change.get("name"))
+            if self._unsaved() and not change.get("discard") and name.lower() != str(current or "").lower():
+                raise ValueError(f"{current or 'This worktable'} has changes that are not saved: save them first, "
+                                 "or switch without them.")
+        config = self._fitted(worktable.read_saved(self._layouts, name))
+        config[worktable.BASED_ON] = worktable.find_layout(self._layouts, name)
+        if self._config.get("other_worktables"):
+            config["other_worktables"] = self._config["other_worktables"]
+        return config
+
+    def _edit_use_layout(self, config: dict, structural: bool) -> str:
+        if structural:
+            self._rebuild(config)
+        else:  # the same labware in the same places: only what the wells start with goes back
+            self._set_starting_liquids(config.get("liquids") or [])
+            self._config[worktable.BASED_ON] = config[worktable.BASED_ON]
+        return config[worktable.BASED_ON]
+
+    def _set_starting_liquids(self, entries: List[dict]) -> None:
+        """Make `entries` what the wells start with, touching only wells whose start changes (a
+        well a run has drawn from, whose start is the same, keeps what it holds now)."""
+        before = worktable.starting_liquids(self._config, self.deck)
+        after = worktable.starting_liquids({"liquids": entries}, self.deck)
+        found = self._labware_map()
+        for labware in set(before) | set(after):
+            resource = found.get(labware)
+            if resource is None:
+                continue
+            for well in set(before.get(labware, {})) | set(after.get(labware, {})):
+                was, now = before.get(labware, {}).get(well), after.get(labware, {}).get(well)
+                if was == now:
+                    continue
+                item = resource.get_item(well) if isinstance(resource, ItemizedResource) else resource
+                liquid, volume = now or (None, 0.0)
+                item.tracker.set_volume(volume)
+                self._ledger.set((labware, well), liquid or "", volume)
+        self._config["liquids"] = copy.deepcopy(entries)
+
+    def _edit_save_layout(self, name: str, replace: bool) -> str:
+        current = self._config.get(worktable.BASED_ON)
+        name = worktable.layout_name(name or current)
+        existing = worktable.find_layout(self._layouts, name)
+        if existing and existing.lower() != str(current or "").lower() and not replace:
+            raise ValueError(f"A layout called '{existing}' is already saved: replace it, or pick another name.")
+        name = existing or name
+        worktable.save_layout(self._layouts, name, self._config)
+        self._config[worktable.BASED_ON] = name
+        return name
+
+    def _edit_delete_layout(self, name: str) -> str:
+        current = self._config.get(worktable.BASED_ON)
+        name = worktable.layout_name(name or current)
+        worktable.delete_layout(self._layouts, name)
+        if current and current.lower() == name.lower():
+            self._config.pop(worktable.BASED_ON, None)  # the worktable stays; it is no longer a saved one
+        return name
+
+    def __ivoryos_labware_export__(self, name: Optional[str] = None) -> dict:
+        """A layout as a file to keep or hand to someone, who imports it: the one in use, or a saved
+        one by name. {"filename", "layout"}."""
+        if name:
+            found = worktable.find_layout(self._layouts, worktable.layout_name(name))
+            layout = worktable.layout_of(worktable.read_saved(self._layouts, name))
+        else:
+            found = self._config.get(worktable.BASED_ON)
+            layout = worktable.layout_of(self._config)
+        return {"filename": f"{found or 'worktable'}.json", "layout": {"format": worktable.FORMAT, **layout}}
 
 
 def _per_well(value, count: int, what: str) -> List[float]:
