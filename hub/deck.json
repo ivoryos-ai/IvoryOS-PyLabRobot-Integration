@@ -1,0 +1,126 @@
+{
+  "format": "ivoryos-deck/1",
+  "name": "plr-ivoryos: every liquid handler, simulated",
+  "packages": [
+    "plr-ivoryos==1.0.0b2"
+  ],
+  "instruments": [
+    {
+      "name": "star",
+      "import": "plr_ivoryos.hamilton",
+      "class": "STAR",
+      "args": {
+        "simulated": true,
+        "deck_type": "STARLetDeck",
+        "worktable": "star.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "prep",
+      "import": "plr_ivoryos.hamilton",
+      "class": "Prep",
+      "args": {
+        "simulated": true,
+        "worktable": "prep.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "ot2",
+      "import": "plr_ivoryos.opentrons",
+      "class": "OT2",
+      "args": {
+        "simulated": true,
+        "port": 31950,
+        "worktable": "ot2.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "flex",
+      "import": "plr_ivoryos.opentrons",
+      "class": "Flex",
+      "args": {
+        "simulated": true,
+        "port": 31950,
+        "worktable": "flex.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "nimbus",
+      "import": "plr_ivoryos.legacy",
+      "class": "Nimbus",
+      "args": {
+        "simulated": true,
+        "port": 2000,
+        "worktable": "nimbus.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "vantage",
+      "import": "plr_ivoryos.legacy",
+      "class": "Vantage",
+      "args": {
+        "simulated": true,
+        "worktable": "vantage.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "evo",
+      "import": "plr_ivoryos.legacy",
+      "class": "EVO",
+      "args": {
+        "simulated": true,
+        "deck_type": "EVO150Deck",
+        "worktable": "evo.json",
+        "diti_count": 0,
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "lh",
+      "import": "plr_ivoryos.legacy",
+      "class": "LiquidHandler",
+      "args": {
+        "simulated": true,
+        "channels": 8,
+        "deck_type": "STARLetDeck",
+        "worktable": "lh.json",
+        "step_delay_s": 0
+      }
+    },
+    {
+      "name": "flex96",
+      "import": "plr_ivoryos.opentrons",
+      "class": "Flex",
+      "args": {
+        "simulated": true,
+        "worktable": "flex96.json",
+        "equipment": {
+          "head96": "p1000_96",
+          "gripper": true,
+          "trash": "A3"
+        }
+      }
+    },
+    {
+      "name": "star384",
+      "import": "plr_ivoryos.hamilton",
+      "class": "STAR",
+      "args": {
+        "simulated": true,
+        "worktable": "star384.json",
+        "equipment": {
+          "head384": true
+        }
+      }
+    }
+  ],
+  "plugins": [
+    "plr_ivoryos.labware_view:plugin"
+  ]
+}
