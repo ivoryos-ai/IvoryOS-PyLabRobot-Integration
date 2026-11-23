@@ -1,6 +1,6 @@
-"""A simulated Opentrons Flex: the robot-server's HTTP API, answered in Python.
+"""A simulated Opentrons Flex or OT-2: the robot-server's HTTP API, answered in Python.
 
-PyLabRobot 1.0's Flex talks to the robot only through one HTTP transport (`pylabrobot.io.HTTP`),
+PyLabRobot 1.0's Flex (and its OT-2, which speaks the same API) talks to the robot only through one HTTP transport (`pylabrobot.io.HTTP`),
 which its constructor takes as `io=`. This is that transport with no robot behind it. Everything
 above it runs exactly as it does against hardware: PyLabRobot's Flex sets up, discovers the pipettes
 and gripper this says are mounted, uploads labware definitions, and sends every command a real run
@@ -40,6 +40,17 @@ FLEX_PIPETTES: Dict[str, Dict[str, Any]] = {
                 "label": "Flex 96-Channel 200 µL"},
 }
 
+# The OT-2 pipettes PyLabRobot 1.0 drives, by the name the robot reports, with their channels and
+# volume range: PyLabRobot's own table, so a pipette it adds is simulated too.
+from pylabrobot.opentrons.ot2.pipette import _PIPETTE_SPECS as _OT2_SPECS  # noqa: E402
+
+OT2_PIPETTES: Dict[str, Dict[str, Any]] = {
+    name: {"model": f"{name.replace('_gen2', '')}_v2.1" if name.endswith("_gen2") else f"{name}_v1.5",
+           "channels": spec.channels, "min_ul": float(spec.minimum_volume), "max_ul": float(spec.maximum_volume),
+           "label": f"{'GEN2 ' if name.endswith('_gen2') else ''}{'8-Channel' if spec.channels == 8 else 'Single-Channel'} "
+                    f"{spec.maximum_volume:g} µL"}
+    for name, spec in _OT2_SPECS.items()}
+
 API_VERSION = "8.4.0"  # recent enough for every command PyLabRobot sends (robot/* needs 8.2.0)
 
 
@@ -65,13 +76,18 @@ class SimulatedFlexServer(HTTP):
                  one. Without it every pickup finds a tip.
     """
 
+    PIPETTES = FLEX_PIPETTES
+    ROBOT_MODEL = "OT-3 Standard"
+    LABEL = "Opentrons Flex"
+    HOME = {"x": 0.0, "y": 0.0, "z": 100.0}  # where a pipette is before it is moved
+
     def __init__(self, mounts: Dict[str, str], gripper: bool = True, trash: Optional[str] = "A3",
                  delay_s: float = 0.0, name: str = "simulated-flex",
                  labware: Optional[Callable[[str], Any]] = None):
-        super().__init__("Simulated Opentrons Flex", "http://simulated-flex", timeout=30)
-        unknown = [p for p in mounts.values() if p not in FLEX_PIPETTES]
+        super().__init__(f"Simulated {self.LABEL}", f"http://{name}", timeout=30)
+        unknown = [p for p in mounts.values() if p not in self.PIPETTES]
         if unknown:
-            raise ValueError(f"'{unknown[0]}' is not a Flex pipette: {', '.join(FLEX_PIPETTES)}")
+            raise ValueError(f"'{unknown[0]}' is not a pipette for this robot: {', '.join(self.PIPETTES)}")
         self.mounts = dict(mounts)
         self.gripper = bool(gripper)
         self.trash = trash
@@ -95,7 +111,7 @@ class SimulatedFlexServer(HTTP):
     def _instruments(self) -> List[dict]:
         out = []
         for mount, name in self.mounts.items():
-            spec = FLEX_PIPETTES[name]
+            spec = self.PIPETTES[name]
             out.append({"mount": mount, "instrumentType": "pipette", "instrumentName": name,
                         "instrumentModel": spec["model"],
                         "data": {"channels": spec["channels"], "min_volume": spec["min_ul"],
@@ -108,7 +124,7 @@ class SimulatedFlexServer(HTTP):
     async def request(self, method: str, path: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         method = method.upper()
         if method == "GET" and path == "/health":
-            return {"name": self.name, "robot_model": "OT-3 Standard", "api_version": API_VERSION,
+            return {"name": self.name, "robot_model": self.ROBOT_MODEL, "api_version": API_VERSION,
                     "robot_serial": "SIMULATED"}
         if method == "GET" and path == "/instruments":
             return {"data": self._instruments()}
@@ -188,7 +204,11 @@ class SimulatedFlexServer(HTTP):
                 return "failed", None, {"errorType": "TipNotAttachedError" if wanted else "TipAttachedError",
                                         "detail": "The tip sensor did not read what was expected."}
         elif command_type == "savePosition":
-            return "succeeded", {"position": {"x": 0.0, "y": 0.0, "z": 100.0}}, None
+            at = run.setdefault("positions", {}).get(params.get("pipetteId"), self.HOME)
+            return "succeeded", {"position": dict(at)}, None
+        elif command_type == "moveToCoordinates" and isinstance(params.get("coordinates"), dict):
+            run.setdefault("positions", {})[params.get("pipetteId")] = {
+                axis: float(params["coordinates"].get(axis, self.HOME[axis])) for axis in ("x", "y", "z")}
         elif command_type in ("liquidProbe", "tryLiquidProbe"):
             return "succeeded", {"z_position": 10.0}, None
         elif command_type and command_type.startswith("robot/move"):
@@ -213,7 +233,7 @@ class SimulatedFlexServer(HTTP):
         except ResourceNotFoundError:
             return True
         pipette = run.get("pipettes", {}).get(params.get("pipetteId"))
-        channels = FLEX_PIPETTES.get(pipette, {}).get("channels")
+        channels = self.PIPETTES.get(pipette, {}).get("channels")
         if channels == 1:
             spots = [rack.get_item(well)]
         elif channels == 8:
@@ -223,3 +243,26 @@ class SimulatedFlexServer(HTTP):
         else:
             return True
         return any(_holds_a_tip(spot) for spot in spots)
+
+
+class SimulatedOT2Server(SimulatedFlexServer):
+    """The robot-server of an OT-2 with these pipettes mounted ({"left": "p300_multi_gen2", "right":
+    "p20_single_gen2"}): what the Flex's answers, plus the OT-2's own pipette query and homing. An
+    OT-2 has no gripper, and its trash is fixed in slot 12."""
+
+    PIPETTES = OT2_PIPETTES
+    ROBOT_MODEL = "OT-2 Standard"
+    LABEL = "Opentrons OT-2"
+    HOME = {"x": 200.0, "y": 200.0, "z": 150.0}  # within both mounts' reach, as homing leaves it
+
+    def __init__(self, mounts: Dict[str, str], delay_s: float = 0.0, name: str = "simulated-ot2",
+                 labware: Optional[Callable[[str], Any]] = None):
+        super().__init__(mounts, gripper=False, trash=None, delay_s=delay_s, name=name, labware=labware)
+
+    async def request(self, method: str, path: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if method.upper() == "GET" and path == "/pipettes":
+            return {mount: ({"name": name, "model": self.PIPETTES[name]["model"], "id": f"SIM-{mount}"}
+                            if (name := self.mounts.get(mount)) else {}) for mount in ("left", "right")}
+        if method.upper() == "POST" and path == "/robot/home":
+            return {"message": "Homing robot."}
+        return await super().request(method, path, data)

@@ -7,7 +7,7 @@ name = "plr-ivoryos"
 # Versioned with the PyLabRobot it is written against: 1.x is PyLabRobot 1.x. While PyLabRobot 1.0
 # is in beta, each beta of this package is pinned to exactly one of its betas, since a beta can
 # rename what this package calls.
-version = "1.0.0b1"
+version = "1.0.0b2"
 description = "IvoryOS-compatible wrappers for PyLabRobot devices"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,7 +15,7 @@ license = {text = "MIT"}
 authors = [
     {name = "IvoryOS Contributors"}
 ]
-keywords = ["lab-automation", "ivoryos", "pylabrobot", "liquid-handler", "opentrons-flex"]
+keywords = ["lab-automation", "ivoryos", "pylabrobot", "liquid-handler", "opentrons-flex", "opentrons-ot2", "hamilton-star", "tecan-evo"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",

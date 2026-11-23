@@ -64,19 +64,39 @@ from plr_ivoryos.wells import ALL, expand_wells
 FORMAT = "plr-ivoryos-worktable/1"
 DEFAULT_DECK = "FlexDeck"
 
-# The worktables this can build and read, and what a person calls them. Each is the deck of a robot
-# PyLabRobot 1.0 drives with a class of its own; which of them a plr-ivoryos robot can have is that
+# The worktables this can build and read, and what a person calls them: the deck of every liquid
+# handler PyLabRobot 1.0.0b1 drives, with a class of its own (Flex, OT-2, STAR, Prep) or through
+# pylabrobot.legacy (Nimbus, Vantage, EVO). Which of them a plr-ivoryos robot can have is that
 # robot's to say (the Flex: FlexDeck).
 DECKS = {
     "FlexDeck": "Opentrons Flex",
     "OTDeck": "Opentrons OT-2",
     "STARLetDeck": "Hamilton STARlet",
     "STARDeck": "Hamilton STAR",
+    "STARPlusDeck": "Hamilton STARplus",
+    "PrepDeck": "Hamilton Prep",
+    "NimbusDeck": "Hamilton Nimbus",
+    "VantageDeck": "Hamilton Vantage 1.3 m",
+    "EVO100Deck": "Tecan Freedom EVO 100",
+    "EVO150Deck": "Tecan Freedom EVO 150",
+    "EVO200Deck": "Tecan Freedom EVO 200",
 }
+
+# Decks whose constructor needs an argument a file does not give.
+_DECK_ARGS = {"VantageDeck": {"size": 1.3}}
 
 
 def make_deck(kind: str):
-    return resolve(kind)()
+    return resolve(kind)(**_DECK_ARGS.get(kind, {}))
+
+
+def is_tecan(deck) -> bool:
+    """A Tecan deck: carriers go on rails (`rails=`), not tracks."""
+    return type(deck).__name__ == "TecanDeck"
+
+
+def is_prep(deck) -> bool:
+    return type(deck).__name__ == "PrepDeck"
 
 
 _SEARCH = ["pylabrobot.resources", "pylabrobot.resources.hamilton", "pylabrobot.resources.corning",
@@ -122,7 +142,15 @@ def is_flex(deck) -> bool:
 
 def slot_of(deck, slot):
     """A slot as the deck takes it: "C1" on a Flex (and its staging slots A4 to D4), a number on
-    an OT-2."""
+    an OT-2 (1 to 11) or a Prep (its spots, 0 to 7, front left first, column by column)."""
+    if is_prep(deck):
+        try:
+            index = int(slot)
+        except (TypeError, ValueError):
+            index = -1
+        if not 0 <= index < len(deck.spots):
+            raise ValueError(f"'{slot}' is not a spot on a Prep: they are 0 to {len(deck.spots) - 1}.")
+        return deck.spots[index]
     if is_flex(deck):
         text = str(slot).strip().upper()
         if text not in deck.slots:
@@ -148,9 +176,12 @@ def _place(deck, entry: dict) -> None:
             resource.assign_child_resource(_resource_for(child),
                                            location=Coordinate(at.get("x", 0), at.get("y", 0), at.get("z", 0)))
     if "slot" in entry:
-        deck.assign_child_at_slot(resource, slot_of(deck, entry["slot"]))
+        if is_prep(deck):
+            slot_of(deck, entry["slot"]).assign_child_resource(resource)
+        else:
+            deck.assign_child_at_slot(resource, slot_of(deck, entry["slot"]))
     elif "rails" in entry:
-        deck.assign_child_resource(resource, track=int(entry["rails"]))
+        on_rails(deck, resource, int(entry["rails"]))
     else:
         at = entry.get("location") or {}
         deck.assign_child_resource(resource, location=Coordinate(at.get("x", 0), at.get("y", 0), at.get("z", 0)))
@@ -179,8 +210,25 @@ def build_deck(config: dict):
     return deck
 
 
+def on_rails(deck, resource, rails: int) -> None:
+    """Put a carrier on a deck's tracks (Hamilton) or rails (Tecan)."""
+    if is_tecan(deck):
+        deck.assign_child_resource(resource, rails=rails)
+    else:
+        deck.assign_child_resource(resource, track=rails)
+
+
+def num_rails(deck) -> int:
+    """How many tracks (Hamilton) or rails (Tecan) a deck has; 0 for a deck of slots."""
+    return int((deck.num_rails if is_tecan(deck) else getattr(deck, "num_tracks", None)) or 0)
+
+
 def rails_of(deck) -> List[Dict[str, float]]:
-    """Where each track of a Hamilton worktable is, `[{"rail", "x"}]`; empty for a deck of slots."""
+    """Where each track of a Hamilton worktable (each rail of a Tecan one) is, `[{"rail", "x"}]`;
+    empty for a deck of slots."""
+    if is_tecan(deck):
+        from pylabrobot.resources.tecan.tecan_decks import _RAILS_WIDTH
+        return [{"rail": n, "x": round((n - 1) * _RAILS_WIDTH + 100, 2)} for n in range(1, deck.num_rails + 1)]
     count = getattr(deck, "num_tracks", None)
     if not count or not hasattr(deck, "track_to_location"):
         return []
@@ -445,6 +493,41 @@ STARTERS: Dict[str, dict] = {
                      {"name": "assay_plate", "type": _PLATE, "slot": "D2"},
                      {"name": "sample_plate", "type": _PLATE, "slot": "D3"},
                  ], "liquids": _LIQUIDS},
+    # Tips at the left end of the tracks, the plates beside them, clear of each robot's trash.
+    **{kind: {"deck_type": kind, "resources": [
+        {"name": "tip_carrier", "type": "TIP_CAR_480_A00", "rails": 1, "children": [
+            {"name": "tips", "type": "hamilton_96_tiprack_1000uL_filter", "site": 0},
+            {"name": "tips_b", "type": "hamilton_96_tiprack_1000uL_filter", "site": 1}]},
+        {"name": "plate_carrier", "type": "PLT_CAR_L5AC_A00", "rails": 8, "children": [
+            {"name": "reservoir", "type": _RESERVOIR, "site": 0},
+            {"name": "assay_plate", "type": _PLATE, "site": 1},
+            {"name": "sample_plate", "type": _PLATE, "site": 2}]},
+    ], "liquids": _LIQUIDS} for kind in ("STARLetDeck", "STARDeck", "STARPlusDeck", "NimbusDeck", "VantageDeck")},
+    # No tips: PyLabRobot 1.0.0b1 refuses to make any Tecan tip rack ("Tip diameter is not defined"),
+    # the diameters not having been measured yet.
+    **{kind: {"deck_type": kind, "resources": [
+        {"name": "plate_carrier", "type": "MP_3Pos", "rails": 16, "children": [
+            {"name": "reservoir", "type": _RESERVOIR, "site": 0},
+            {"name": "assay_plate", "type": "Microplate_96_Well", "site": 1},
+            {"name": "sample_plate", "type": "Microplate_96_Well", "site": 2}]},
+    ], "liquids": _LIQUIDS} for kind in ("EVO100Deck", "EVO150Deck", "EVO200Deck")},
+    # The trash is the OT-2's own, in slot 12.
+    "OTDeck": {"deck_type": "OTDeck",
+               "equipment": {"left": "p300_multi_gen2", "right": "p300_single_gen2"},
+               "resources": [
+                   {"name": "tips", "type": "opentrons_96_tiprack_300ul", "slot": 1},
+                   {"name": "tips_b", "type": "opentrons_96_tiprack_300ul", "slot": 4},
+                   {"name": "reservoir", "type": _RESERVOIR, "slot": 2},
+                   {"name": "assay_plate", "type": _PLATE, "slot": 3},
+                   {"name": "sample_plate", "type": _PLATE, "slot": 6},
+               ], "liquids": _LIQUIDS},
+    "PrepDeck": {"deck_type": "PrepDeck", "resources": [
+        {"name": "tips", "type": "hamilton_96_tiprack_1000uL_filter", "slot": 0},
+        {"name": "tips_b", "type": "hamilton_96_tiprack_1000uL_filter", "slot": 1},
+        {"name": "reservoir", "type": _RESERVOIR, "slot": 4},
+        {"name": "assay_plate", "type": _PLATE, "slot": 5},
+        {"name": "sample_plate", "type": _PLATE, "slot": 6},
+    ], "liquids": _LIQUIDS},
 }
 
 
@@ -479,7 +562,12 @@ def _maker(name: str, module: str) -> str:
 
 
 # Whose tip racks and carriers fit which robot. Plates, reservoirs and tube racks fit any.
-_MAKER = {"FlexDeck": "opentrons_flex", "OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton"}
+_MAKER = {"FlexDeck": "opentrons_flex", "OTDeck": "opentrons", "STARLetDeck": "hamilton", "STARDeck": "hamilton",
+          "STARPlusDeck": "hamilton", "PrepDeck": "hamilton", "NimbusDeck": "hamilton", "VantageDeck": "hamilton",
+          "EVO100Deck": "tecan", "EVO150Deck": "tecan", "EVO200Deck": "tecan"}
+# Robots whose carriers sit on tracks or rails (the rest have slots).
+_TRACKED = {"STARLetDeck", "STARDeck", "STARPlusDeck", "NimbusDeck", "VantageDeck", "EVO100Deck", "EVO150Deck",
+            "EVO200Deck"}
 
 
 def _all_definitions() -> List[Dict[str, str]]:
@@ -514,14 +602,14 @@ def catalog(deck_type: Optional[str] = None) -> List[Dict[str, str]]:
     from each definition's return type, so nothing is constructed to find out; an old spelling kept
     as an alias is left out."""
     maker = _MAKER.get(deck_type or "", "")
-    tracks = maker == "hamilton"
+    tracks = (deck_type or "") in _TRACKED
     out = []
     for entry in _all_definitions():
         if entry["category"] == "carrier" and not (tracks and entry["maker"] == maker):
             continue
         if entry["category"] == "tip_rack" and maker and entry["maker"] != maker:
             continue
-        if entry["category"] == "plate" and entry["maker"] == "tecan":
+        if entry["category"] == "plate" and entry["maker"] == "tecan" and maker != "tecan":
             continue
         out.append({"definition": entry["definition"], "category": entry["category"]})
     return out
@@ -538,7 +626,11 @@ def kind_of(deck) -> str:
     """Which of DECKS a PyLabRobot deck is."""
     name = type(deck).__name__
     if name == "HamiltonSTARDeck":
-        return "STARLetDeck" if getattr(deck, "num_tracks", None) == 30 else "STARDeck"
+        return {30: "STARLetDeck", 76: "STARPlusDeck"}.get(getattr(deck, "num_tracks", None), "STARDeck")
+    if name == "TecanDeck":
+        found = {30: "EVO100Deck", 45: "EVO150Deck", 69: "EVO200Deck"}.get(getattr(deck, "num_rails", None))
+        if found:
+            return found
     if name in DECKS:
         return name
     raise ValueError(f"A {name} is not a worktable this knows ({', '.join(DECKS.values())}).")
@@ -583,6 +675,9 @@ def _entry_of(resource, empty_holders: bool = False) -> dict:
 
 def _rail_of(deck, carrier) -> Optional[int]:
     """The track a carrier sits on, by finding where PyLabRobot would put it on each track."""
+    if is_tecan(deck):
+        rails = deck._rails_for_x_coordinate(carrier.location.x)
+        return rails if 1 <= rails <= deck.num_rails else None
     for n in range(1, (getattr(deck, "num_tracks", None) or 0) + 1):
         at = deck.track_to_location(n)
         if abs(at.x - carrier.location.x) < 0.05 and abs(at.y - carrier.location.y) < 0.05:
@@ -591,7 +686,10 @@ def _rail_of(deck, carrier) -> Optional[int]:
 
 
 def slot_label(holder) -> str:
-    """A slot holder's slot as a person names it: "C1" (flex_deck_slot_C1), "6" (ot2_deck_slot_6)."""
+    """A slot holder's slot as a person names it: "C1" (flex_deck_slot_C1), "6" (ot2_deck_slot_6),
+    "0" for a Prep's first spot (spot_0_0)."""
+    if holder.parent is not None and is_prep(holder.parent):
+        return str(holder.parent.spots.index(holder))
     return str(holder.name).rsplit("_", 1)[-1]
 
 

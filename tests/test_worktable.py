@@ -58,8 +58,8 @@ def test_a_pylabrobot_deck_file_becomes_a_worktable_by_name():
 def test_a_layout_that_is_not_one_says_what_it_is():
     with pytest.raises(ValueError, match="not a JSON layout"):
         worktable.read_layout("{")
-    with pytest.raises(ValueError, match="'EVO150Deck' is not a worktable this knows"):
-        worktable.read_layout(json.dumps({"deck_type": "EVO150Deck", "resources": []}))
+    with pytest.raises(ValueError, match="'BiomekDeck' is not a worktable this knows"):
+        worktable.read_layout(json.dumps({"deck_type": "BiomekDeck", "resources": []}))
     with pytest.raises(ValueError, match="state file"):
         worktable.read_layout(json.dumps({"plate_well_A1": {"volume": 10}}))
 

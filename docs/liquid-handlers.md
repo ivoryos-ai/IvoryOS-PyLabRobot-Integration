@@ -1,31 +1,32 @@
 # Liquid handlers: where each one is
 
-Checked 2026-11-22 by reading and running PyLabRobot 0.2.2 and 1.0.0b1. No robot in this table has
-been run on real hardware with this package, in either line.
+Checked 2026-11-23 against PyLabRobot 0.2.2 and 1.0.0b1. No robot in this table has been run on
+real hardware with this package, in either line. Which simulator each one runs on, and what
+PyLabRobot lacks, is in [simulators.md](simulators.md).
 
 ## The two lines of this package
 
 - **0.2.x** is for PyLabRobot 0.2.x. Every robot is one instrument, PyLabRobot's old
   `LiquidHandler`, with the same steps on each (`aspirate`, `dispense`, `transfer`, `pick_up_tips`,
   `move_plate`, ...) and PyLabRobot's generic simulator.
-- **1.0** is for PyLabRobot 1.0. Each robot has its own class and each thing mounted on it is an
-  instrument of its own, with PyLabRobot's step names. Only the Flex is done.
+- **1.0** is for PyLabRobot 1.0. A robot PyLabRobot 1.0 has a class for has its class here, and
+  each thing fitted to it is an instrument of its own, with PyLabRobot's step names. A robot only
+  `pylabrobot.legacy` drives is that legacy `LiquidHandler`, one instrument. Since 1.0.0b2 every
+  liquid handler PyLabRobot 1.0.0b1 drives is here.
 
 ## Robot by robot
 
-| Robot | This package 0.2.x | Where it is in PyLabRobot 1.0.0b1 | This package 1.0 |
+| Robot | This package 0.2.x | Where it is in PyLabRobot 1.0.0b1 | This package 1.0 (since 1.0.0b2) |
 | :--- | :--- | :--- | :--- |
-| Opentrons Flex | not included | `pylabrobot.opentrons`: `Flex`, `FlexHead1`, `FlexHead8`, `FlexHead96`, `FlexGripper`. No simulator. | Done, with this package's simulator |
-| Opentrons OT-2 | included | `pylabrobot.opentrons`: `OT2`, `OT2SingleChannelPipette`, `OT2_8ChannelPipette`. No simulator. | Not done. Needs a simulator written first. |
-| Hamilton STAR, STARlet | included | `pylabrobot.hamilton.star`: `STAR`, `STARlet`, `STARPlus`, with `STARSimulationDriver` | Not done. Can be built against PyLabRobot's simulator. |
-| Hamilton Prep | not included | `pylabrobot.hamilton.prep`: `Prep`, with `PrepSimulationDriver` | Not done |
-| Hamilton Nimbus | included | only `pylabrobot.legacy` | Not planned |
-| Hamilton Vantage | included | only `pylabrobot.legacy` | Not planned |
-| Tecan EVO 100, 150, 200 | included | only `pylabrobot.legacy` | Not planned |
+| Opentrons Flex | not included | `pylabrobot.opentrons`: `Flex`, `FlexHead1`, `FlexHead8`, `FlexHead96`, `FlexGripper`. No simulator. | `opentrons.Flex` (since 1.0.0b1), on this package's simulated robot-server |
+| Opentrons OT-2 | included | `pylabrobot.opentrons`: `OT2`, `OT2SingleChannelPipette`, `OT2_8ChannelPipette`. No simulator. | `opentrons.OT2`, on the same simulated robot-server |
+| Hamilton STAR, STARlet, STARplus | included (STAR, STARlet) | `pylabrobot.hamilton.star`: `STAR`, `STARlet`, `STARPlus`, with `STARSimulationDriver` | `hamilton.STAR`, on PyLabRobot's simulator |
+| Hamilton Prep | not included | `pylabrobot.hamilton.prep`: `Prep`, with `PrepSimulationDriver` | `hamilton.Prep`, on PyLabRobot's simulator |
+| Hamilton Nimbus | included | only `pylabrobot.legacy` | `legacy.Nimbus`, on PyLabRobot's legacy chatterbox |
+| Hamilton Vantage | included | only `pylabrobot.legacy` | `legacy.Vantage`, the same |
+| Tecan EVO 100, 150, 200 | included | only `pylabrobot.legacy` | `legacy.EVO`, the same; no disposable tips yet (PyLabRobot cannot make a Tecan tip rack) |
 
-Already in the 1.0 line for the OT-2 and the STAR: the worktable file builds their decks
-(`OTDeck`, `STARDeck`, `STARLetDeck` in `worktable.py`), and the Labware view draws any robot.
-What is missing is the driver class for each, like `opentrons/flex.py` for the Flex.
+Every one of them has a worktable file, is drawn in the Labware view, and keeps saved layouts.
 
 ## What the robot can do, 0.2 against 1.0
 
@@ -41,15 +42,16 @@ So 1.0 is not a step down for these two. The OT-2 is thin only next to the Flex.
 A workflow written for a 0.2 robot has to be rewritten for the same robot on 1.0: the instrument
 names and the step names are different (`star.aspirate` becomes a step on one of the STAR's
 parts). This is on purpose: 1.0 uses PyLabRobot's own names and does not try to make one workflow
-run on two kinds of robot.
+run on two kinds of robot. A Nimbus, Vantage or EVO keeps the old step names, being PyLabRobot's
+legacy `LiquidHandler`, but is a different instrument class, so its workflows need redoing too.
 
 ## The legacy route
 
-`pylabrobot.legacy` in 1.0.0b1 still holds the old `LiquidHandler`, its backends (STAR, Vantage,
-Nimbus, EVO, OT-2) and its simulator. It started and stopped on all eight old worktables; no step
-was run on it. PyLabRobot marks it legacy and tells callers to move off it, and this package's 0.2
-code does not run on it as it is (14 of its 32 tests fail on 1.0.0b1). This package does not use
-it. It is the only route to a Nimbus, Vantage or EVO on PyLabRobot 1.0, if someone asks for one.
+`pylabrobot.legacy` in 1.0.0b1 still holds the old `LiquidHandler`, its backends and its
+simulator. PyLabRobot marks it legacy and tells callers to move off it, but it is the only route to
+a Nimbus, Vantage or EVO on PyLabRobot 1.0, so this package uses it for those three
+(`plr_ivoryos.legacy`), and for any other legacy backend handed to `legacy.LiquidHandler`. When
+PyLabRobot gives one of them a 1.0 class, it moves to that class here, as the STAR and OT-2 did.
 
 ## Versions
 
@@ -61,8 +63,8 @@ it. It is the only route to a Nimbus, Vantage or EVO on PyLabRobot 1.0, if someo
   bound, so it will break when PyLabRobot 1.0 is final. On 2026-11-22 that branch passed its tests
   on PyLabRobot 0.2.2 and ran a simulated STARlet and OT-2 with the current IvoryOS edge.
 
-## Order of work, when picked up
+## What is left
 
-1. Hamilton STAR and STARlet on 1.0 (a simulator exists).
-2. Opentrons OT-2 on 1.0 (write the simulator first, as was done for the Flex).
-3. Nimbus, Vantage, EVO only when someone needs one.
+What PyLabRobot lacks for these robots (an OT-2 and Flex simulator, 1.0 classes for the Nimbus,
+Vantage and EVO, Tecan tip racks, decks that cannot be read back from their own `serialize()`) is
+listed with what to send upstream in [simulators.md](simulators.md).

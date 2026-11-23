@@ -211,3 +211,47 @@ def test_layouts_can_live_in_a_folder_of_their_own(data_folder):
     robot = Flex(simulated=True, worktable=write(data_folder, FILE), layouts_folder="shared layouts")
     robot.__ivoryos_labware_edit__("save_layout", name="Screen")
     assert os.listdir(os.path.join(str(data_folder), "shared layouts")) == ["Screen.json"]
+
+
+# --- every other liquid handler ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("cls", ["STAR", "Prep", "OT2", "Nimbus", "Vantage", "EVO"])
+def test_every_liquid_handler_saves_switches_and_reverts_layouts(cls, data_folder):
+    import plr_ivoryos
+    robot = getattr(plr_ivoryos, cls)(simulated=True, layouts_folder="layouts")
+    edit = robot.__ivoryos_labware_edit__
+    try:
+        assert edit("save_layout", name="Screen") == {"name": "Screen", "restart": False}
+        edit("liquid", labware="assay_plate", wells="A1", liquid="dye", volume_ul=50)
+        assert status(robot)["changed"] == {"layout": False, "liquids": True}
+        edit("save_layout", name="Dyed")
+        assert edit("use_layout", name="Screen") == {"name": "Screen", "restart": False}, "liquids only"
+        assert robot.read_volumes("assay_plate[A1]") == {"assay_plate[A1]": 0.0}
+        edit("remove", name="sample_plate")
+        assert robot.__ivoryos_labware__()["deck"]["restart_needed"] is True
+        assert edit("revert") == {"name": "Screen", "restart": False}, "back to what the deck started with"
+        assert "sample_plate" in robot.__ivoryos_labware__()["labware"]
+        assert edit("use_layout", name="Dyed")["restart"] is False
+        assert robot.read_volumes("assay_plate[A1]") == {"assay_plate[A1]": 50.0}
+        assert robot.__ivoryos_labware_export__()["filename"] == "Dyed.json"
+        assert sorted(os.listdir(os.path.join(str(data_folder), "layouts"))) == ["Dyed.json", "Screen.json"]
+    finally:
+        robot.stop()
+
+
+def test_an_ot2_layout_says_its_pipettes_and_other_ones_need_a_restart(data_folder):
+    from plr_ivoryos import OT2
+    robot = OT2(simulated=True)
+    edit = robot.__ivoryos_labware_edit__
+    try:
+        edit("save_layout", name="Screen")
+        saved = json.load(open(os.path.join(folder(data_folder), "Screen.json")))
+        write(folder(data_folder), {**saved, "equipment": {"left": "p20_single_gen2"}}, "One pipette.json")
+        write(folder(data_folder), {**saved, "equipment": {"left": "p1000_single_flex"}}, "Bad.json")
+        assert edit("use_layout", name="One pipette")["restart"] is True, "the right mount is gone"
+        assert robot.equipment == {"left": "p20_single_gen2"}
+        with pytest.raises(ValueError, match="not an OT-2 pipette"):
+            edit("use_layout", name="Bad")
+        assert edit("use_layout", name="Screen")["restart"] is False
+    finally:
+        robot.stop()

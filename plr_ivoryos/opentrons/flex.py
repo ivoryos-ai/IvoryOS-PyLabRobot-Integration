@@ -35,7 +35,7 @@ from pylabrobot.resources import TipRack
 from plr_ivoryos import bridge, worktable
 from plr_ivoryos.async_bridge import run_async
 from plr_ivoryos.opentrons.simulator import FLEX_PIPETTES, SimulatedFlexServer
-from plr_ivoryos.robot import WorktableRobot
+from plr_ivoryos.robot import Part, WorktableRobot
 from plr_ivoryos.wells import Labware, Site
 
 MOUNTS = ("left", "right")
@@ -360,22 +360,11 @@ def worktable_starter_equipment() -> Dict[str, Any]:
 
 # --- the parts: a pipette on a mount, the 96-channel head, the gripper ------------------------------
 
-class _Part:
-    """Something mounted on a Flex, as an IvoryOS instrument. It reports the Flex's labware (not
-    its deck, which the Flex itself reports) so its steps get labware choices and well pickers."""
-
-    def __init__(self, robot: Flex, part: str):
-        self._robot = robot
-        self._part = part
-
-    def __ivoryos_labware__(self) -> dict:
-        return self._robot._part_layout()
+class _Part(Part):
+    """Something mounted on a Flex, as an IvoryOS instrument (robot.Part)."""
 
     def _target(self):
         return self._robot._head(self._part)
-
-    def _run_step(self, name: str, given: Dict[str, Any], extra: Dict[str, Any], params: Dict[str, bridge.Param]):
-        return self._robot._execute(self._part, self._target, name, given, extra, params)
 
 
 class _Pipette(_Part):
