@@ -26,6 +26,14 @@ command-line flag:
 - `liquids` is what a person put on the worktable before the run.
 - `other_worktables` keeps, per robot, the worktable it had before the robot was switched, so
   switching back loses nothing.
+- `based_on` is the name of the saved layout this worktable came from (below), if any.
+
+This file is the layout in use. Beside it, a folder holds layouts saved by name, one file each in
+this same format (`worktable.layouts/Dye dilution.json`): a person saves the layout in use under a
+name, switches to another, and goes back to one as it was saved. They are plain files on purpose,
+so the folder can be a git repository, or be handed to someone else. A layout that was changed for
+one experiment and not saved is simply the file in use differing from the saved one it names
+(`fingerprint` says in what: the layout itself, or only the liquids put in it).
 
 This file is the one a person (or the Hub, or the Labware panel) writes: short, by name. Whenever
 a robot loads or saves it, PyLabRobot's own description of the same worktable is written beside it
@@ -40,6 +48,7 @@ PyLabRobot's own deck file (`deck.save`).
 """
 
 import copy
+import hashlib
 import importlib
 import inspect
 import json
@@ -325,6 +334,146 @@ def remove(config: dict, name: str) -> bool:
     return False
 
 
+# --- Layouts saved by name -----------------------------------------------------------------------
+
+# What a layout is. Not which saved layout it came from, nor the worktables kept for other robots.
+LAYOUT_PARTS = ("deck_type", "equipment", "resources", "liquids")
+BASED_ON = "based_on"
+
+
+def layout_of(config: dict) -> dict:
+    """The layout a worktable file holds, as it is saved under a name or handed to someone."""
+    return {key: copy.deepcopy(config[key]) for key in LAYOUT_PARTS if config.get(key) is not None}
+
+
+def layouts_folder(path: str) -> str:
+    """Where a worktable's saved layouts go unless told otherwise: worktable.json -> worktable.layouts/."""
+    return os.path.splitext(path)[0] + ".layouts"
+
+
+_NOT_IN_A_NAME = set('/\\:*?"<>|')
+
+
+def layout_name(name) -> str:
+    """A layout's name as given, tidied; it is its file's name, so what a file name cannot hold is
+    refused."""
+    text = " ".join(str(name or "").split()).rstrip(".")
+    if not text:
+        raise ValueError("Give the layout a name.")
+    if len(text) > 80:
+        raise ValueError("A layout's name is at most 80 characters.")
+    if text.startswith(".") or any(c in _NOT_IN_A_NAME or ord(c) < 32 for c in text):
+        raise ValueError('A layout\'s name is its file\'s name: no / \\ : * ? " < > | and no dot in front.')
+    return text
+
+
+def saved_layouts(folder: str) -> List[Dict[str, Any]]:
+    """The layouts saved in `folder`, by name: every .json file there that reads as JSON (one put
+    there by hand, or by git, is a layout like any other). `deck_type` is None for a file that does
+    not say (PyLabRobot's own deck file)."""
+    if not os.path.isdir(folder):
+        return []
+    out = []
+    for file in os.listdir(folder):
+        if file.startswith(".") or not file.lower().endswith(".json"):
+            continue
+        try:
+            data = load(os.path.join(folder, file))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            out.append({"name": file[:-5], "deck_type": data.get("deck_type")})
+    return sorted(out, key=lambda entry: entry["name"].lower())
+
+
+def find_layout(folder: str, name: str) -> Optional[str]:
+    """The saved layout called `name`, as its file spells it. Matched ignoring case: on most
+    computers "Screen" and "screen" are one file."""
+    return next((entry["name"] for entry in saved_layouts(folder) if entry["name"].lower() == name.lower()), None)
+
+
+def read_saved(folder: str, name: str) -> dict:
+    """The saved layout called `name`, checked by building it."""
+    found = find_layout(folder, name)
+    if found is None:
+        raise ValueError(f"No layout called '{name}' is saved.")
+    with open(os.path.join(folder, found + ".json"), encoding="utf-8") as f:
+        return read_layout(f.read())
+
+
+def save_layout(folder: str, name: str, config: dict) -> str:
+    """Save `config`'s layout as `name`. Returns the file."""
+    path = os.path.join(folder, name + ".json")
+    save(path, layout_of(config))
+    return path
+
+
+def delete_layout(folder: str, name: str) -> None:
+    found = find_layout(folder, name)
+    if found is None:
+        raise ValueError(f"No layout called '{name}' is saved.")
+    os.remove(os.path.join(folder, found + ".json"))
+
+
+def _canonical(entry: dict) -> dict:
+    """A resource entry however it was typed: "c2" is C2, children in the order of their sites."""
+    out = {k: v for k, v in entry.items() if k != "children"}
+    if "slot" in out:
+        out["slot"] = str(out["slot"]).strip().upper()
+    children = sorted((_canonical(child) for child in entry.get("children") or []),
+                      key=lambda child: (str(child.get("site", "")), str(child.get("name", ""))))
+    if children:
+        out["children"] = children
+    return out
+
+
+def starting_liquids(config: dict, deck=None) -> Dict[str, Dict[str, list]]:
+    """What each well starts with, `{labware: {well: [liquid, volume_ul]}}`, however the file groups
+    wells. A later entry for a well replaces an earlier one, as loading them does."""
+    deck = deck if deck is not None else build_deck(config)
+    out: Dict[str, Dict[str, list]] = {}
+    for entry in config.get("liquids") or []:
+        if not deck.has_resource(entry.get("labware", "")):
+            continue
+        wells = entry.get("wells", ALL)
+        wells = ", ".join(wells) if isinstance(wells, (list, tuple)) else wells
+        for well in expand_wells(wells, grid_of(deck.get_resource(entry["labware"]))):
+            volume = float(entry.get("volume_ul") or 0)
+            if volume > 0:
+                out.setdefault(entry["labware"], {})[well] = [entry.get("liquid"), volume]
+            else:
+                out.get(entry["labware"], {}).pop(well, None)
+    return {labware: wells for labware, wells in out.items() if wells}
+
+
+_fingerprints: Dict[str, Dict[str, str]] = {}
+
+
+def _digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def fingerprint(config: dict) -> Dict[str, str]:
+    """Two short hashes that tell layouts apart: `layout` (the robot, what is fitted to it, every
+    labware and where it sits) and `liquids` (what each well starts with). Kept apart because
+    topping up a reservoir is not a different layout. The same for two files that say the same
+    thing in a different order or spelling."""
+    parts = layout_of(config)
+    key = json.dumps(parts, sort_keys=True, default=str)
+    if key not in _fingerprints:
+        layout = {"deck_type": parts.get("deck_type") or DEFAULT_DECK, "equipment": parts.get("equipment") or {},
+                  "resources": sorted((_canonical(e) for e in parts.get("resources") or []),
+                                      key=lambda e: str(e.get("name", "")))}
+        try:
+            liquids: Any = starting_liquids(parts)
+        except Exception:  # a layout that cannot be built: compare what the file says
+            liquids = parts.get("liquids") or []
+        if len(_fingerprints) > 200:
+            _fingerprints.clear()
+        _fingerprints[key] = {"layout": _digest(layout), "liquids": _digest(liquids)}
+    return dict(_fingerprints[key])
+
+
 # --- Ready-made worktables -----------------------------------------------------------------------
 
 _PLATE = "cor_96_wellplate_360uL_Fb"
@@ -593,7 +742,7 @@ def read_layout(text: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("This is not a layout: expected a JSON object.")
     if "deck_type" in data or "resources" in data:
-        config = {k: v for k, v in data.items() if k not in ("format", "other_worktables")}
+        config = {k: v for k, v in data.items() if k not in ("format", "other_worktables", BASED_ON)}
     elif data.get("type") and "children" in data:
         config = from_pylabrobot(data)
     elif data and all(isinstance(v, dict) for v in data.values()) \

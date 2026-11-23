@@ -39,6 +39,23 @@
     .act { border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); border-radius: 7px; padding: 3px 10px; font-weight: 600; }
     .act:disabled { opacity: .45; cursor: default; }
     .plain { border: 1px solid var(--line); background: transparent; border-radius: 7px; padding: 3px 10px; }
+    .plain:disabled { opacity: .45; cursor: default; }
+    a.plain { text-decoration: none; color: inherit; display: inline-block; }
+    #layoutline { margin: -2px 0 8px; }
+    #layoutline b { color: var(--ink); font-weight: 600; }
+    .changed { color: var(--warn-fg); }
+    #editor .ask { background: var(--soft); border-radius: 8px; padding: 7px 9px; }
+    #editor .help { background: var(--soft); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+    #editor .help p:last-child { margin-bottom: 0; }
+    .spacer { flex: 1; }
+    .icon { min-width: 28px; padding: 3px 8px; font-weight: 600; }
+    .icon.on { background: var(--accent-soft); color: var(--accent-fg); border-color: var(--accent); }
+    .menu { position: relative; }
+    .items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 180px; display: flex; flex-direction: column; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 6px 20px rgba(0,0,0,.14); }
+    .items button, .items a { text-align: left; border: none; background: transparent; border-radius: 6px; padding: 5px 9px; color: inherit; text-decoration: none; white-space: nowrap; }
+    .items button:hover, .items a:hover { background: var(--soft); }
+    .items hr { width: 100%; border: none; border-top: 1px solid var(--line); margin: 4px 0; }
+    .items .danger { color: var(--err-fg); }
     .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; padding: 7px 9px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-fg); font-size: 12px; }
     .note.error { background: var(--err-bg); color: var(--err-fg); }
     .note.info { background: var(--soft); color: var(--ink); }
@@ -116,6 +133,7 @@
     <button class="tab" id="edit" hidden>Edit layout</button>
     <span class="live" id="live"><i></i><span>connecting</span></span>
   </header>
+  <div class="kind" id="layoutline"></div>
   <div id="notes"></div>
   <div id="stage"></div>
   <div id="fill"></div>
@@ -125,6 +143,8 @@
   <table id="list"></table>
   <datalist id="liquid-names"></datalist>
   <div id="ghost" hidden></div>
+  <!-- Outside what is redrawn: the file dialog answers to this very element. -->
+  <input type="file" id="importfile" accept=".json,application/json" hidden>
 
   <script>
     // Relative URLs only: the page is served under /plugins/labware/ on whatever host the edge uses.
@@ -135,6 +155,9 @@
     // for steps to offer what changed; `notice` is the last refusal, in the driver's words.
     let editing = false, restart = false, notice = null, query = "", armed = null;
     let imported = null;                    // the file last imported, said once
+    let ask = null;                         // what the layout row is asking: {kind: "saveas" | "switch" | "revert" | "delete", ...}
+    // The editor shows what is used every time; the rest is one click away, so nobody has to read past it.
+    let menu = false, help = false, mounting = false;
     let lastResult = null;                  // what the last change answered
     let picked = new Set();                 // wells chosen on the zoomed labware, for a liquid
     let liquid = { name: "", volume: "" };  // what the fill bar holds
@@ -212,7 +235,7 @@
       renderNotes();
       if (!current || !layouts[current]) {
         $("stage").innerHTML = `<div class="empty">No instrument on this deck reports a worktable.<br>A plr-ivoryos robot (a Flex, OT-2, STAR, Prep, Nimbus, Vantage or EVO) does.</div>`;
-        $("kind").textContent = "";
+        $("kind").textContent = $("layoutline").textContent = "";
         $("legend").innerHTML = $("list").innerHTML = $("fill").innerHTML = "";
         return;
       }
@@ -225,6 +248,7 @@
         .map(k => fitted[k] === true ? k.replace(/_/g, " ") : `${k}: ${fittedLabels[k] || fitted[k]}`);
       $("kind").textContent = (layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : "")
         + (mounted.length ? " · " + mounted.join(", ") : "");
+      $("layoutline").innerHTML = layoutLine(layout.deck.layout);
       if (zoomed && !layout.labware[zoomed]) zoomed = null;
 
       // Millimetres from the front left; the page's y runs the other way. The frame is the whole
@@ -331,6 +355,17 @@
       renderEditor();
     }
 
+    // Which saved layout this worktable is, and whether it still is that layout. Liquids are said
+    // apart: topping up a reservoir is not a different layout.
+    const isChanged = now => !!(now && now.saved && (now.changed.layout || now.changed.liquids));
+    function layoutLine(now) {
+      if (!now) return "";
+      if (!now.name) return "Layout: not saved";
+      if (!now.saved) return `Layout: <b>${esc(now.name)}</b> · no longer saved`;
+      const what = [now.changed.layout && "layout", now.changed.liquids && "liquids"].filter(Boolean).join(" and ");
+      return `Layout: <b>${esc(now.name)}</b>${what ? ` · <span class="changed">${what} changed</span>` : ""}`;
+    }
+
     function removeMark(name, cx, cy) {
       return `<g class="remove" data-remove="${esc(name)}"><title>Take ${esc(name)} off the worktable</title><circle cx="${cx}" cy="${cy}" r="3.4"/><path d="M${cx - 1.4} ${cy - 1.4} L${cx + 1.4} ${cy + 1.4} M${cx + 1.4} ${cy - 1.4} L${cx - 1.4} ${cy + 1.4}"/></g>`;
     }
@@ -372,16 +407,63 @@
       const offered = catalogs[current] || {};
       $("editor").hidden = !editing;
       if (!editing) return;
-      const rails = ((layouts[current] || {}).deck || {}).rails || [];
+      const deck = (layouts[current] || {}).deck || {};
+      let html = topRow(offered, deck.layout || {});
+      if (help) html += helpText(offered, deck);
+      if (mounting) html += mountedRows(offered, deck);
+      html += `<input type="search" id="query" placeholder="Search labware to place (e.g. 96 wellplate, tiprack 300)" value="${esc(query)}" style="width:100%"><div id="palette"></div>`;
+      $("editor").innerHTML = html;
+      renderPalette();
+    }
+
+    // The one row always there: which layout this is (saved, switched, gone back to), then
+    // everything used less often behind "more", and what it all means behind "?".
+    function topRow(offered, now) {
+      const named = offered.layouts, saved = (named || {}).saved || [], changed = isChanged(now);
+      let html = `<div class="row">`;
+      if (named) {
+        const none = now.name && now.saved ? "" : `<option value="" selected>${now.name ? esc(now.name) + " (no longer saved)" : "not saved"}</option>`;
+        html += `<label for="uselayout">Layout</label>
+          <select id="uselayout">${none}${saved.map(n => `<option value="${esc(n)}" ${now.saved && n === now.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+        if (changed) html += `<button class="act" id="savelayout">Save</button><button class="plain" id="revert">Revert</button>`;
+        else if (!now.saved) html += `<button class="plain" id="saveas">Save as…</button>`;
+      }
+      const items = [];
+      if (named && now.saved) items.push(`<button id="saveas">Save as…</button>`);
+      if (offered.importable) items.push(`<button id="import">Import a layout…</button>`);
+      if (named) items.push(`<a href="api/export?worktable=${encodeURIComponent(current)}" download>Download</a>`);
+      if (offered.equipment || (offered.decks || []).length) items.push(`<hr><button id="mounted">${offered.equipment ? "Pipettes and gripper…" : "Robot…"}</button>`);
+      if (named && now.saved) items.push(`<hr><button class="danger" id="dellayout">Delete saved layout</button>`);
+      html += `<span class="spacer"></span>`;
+      if (items.length) html += `<span class="menu"><button class="plain icon ${menu ? "on" : ""}" id="more" aria-label="More" aria-expanded="${menu}">⋯</button>${menu ? `<div class="items">${items.join("")}</div>` : ""}</span>`;
+      html += `<button class="plain icon ${help ? "on" : ""}" id="help" aria-label="Help" aria-pressed="${help}">?</button></div>`;
+      if (!ask || !named) return html;
+      const name = `<b>${esc(now.name || "This worktable")}</b>`, cancel = `<button class="plain" id="askcancel">Cancel</button>`;
+      if (ask.kind === "saveas") {
+        const taken = saved.some(n => n.toLowerCase() === ask.name.trim().toLowerCase());
+        html += `<div class="row ask"><label for="layoutname">Save as</label><input type="text" id="layoutname" placeholder="a name, e.g. Dye dilution" value="${esc(ask.name)}" size="24" spellcheck="false">
+          <button class="act" id="saveasgo" ${ask.name.trim() ? "" : "disabled"}>${taken ? "Replace" : "Save"}</button>${cancel}</div>`;
+      } else if (ask.kind === "switch") {
+        html += `<div class="row ask"><span>${name} has changes that are not saved.</span>
+          ${now.saved ? `<button class="act" id="saveswitch">Save, then switch</button>` : ""}
+          <button class="plain" id="switchgo">Switch without saving</button>${cancel}</div>`;
+      } else if (ask.kind === "revert") {
+        html += `<div class="row ask"><span>Go back to ${name} as it was saved?</span>
+          <button class="act" id="revertgo">Revert</button>${cancel}</div>`;
+      } else if (ask.kind === "delete") {
+        html += `<div class="row ask"><span>Delete the saved layout ${name}? The worktable stays as it is.</span>
+          <button class="act" id="deletego">Delete</button>${cancel}</div>`;
+      }
+      return html;
+    }
+
+    // What is fitted to the robot. Changed rarely, so it opens from "more".
+    function mountedRows(offered, deck) {
       let html = "";
       if ((offered.decks || []).length) {
-        const simulated = ((layouts[current] || {}).deck || {}).simulated;
-        html += `<div class="row"><label for="deck">${simulated ? "Robot" : "Model"}</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select>
-          <span class="kind">each keeps its own worktable</span></div>`;
+        html += `<div class="row"><label for="deck">${deck.simulated ? "Robot" : "Model"}</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></div>`;
       }
       if (offered.equipment) {
-        // What is fitted to the robot. Each mounted pipette and the gripper is an instrument of its
-        // own in IvoryOS, so a change is offered to steps after the deck restarts.
         const eq = offered.equipment, now = eq.current || {};
         const choose = (key, pipettes) => `<select id="eq-${key}" data-equipment="${key}"><option value="none">nothing</option>${
           pipettes.map(p => `<option value="${esc(p.name)}" ${p.name === now[key] ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select>`;
@@ -389,26 +471,32 @@
         html += `<div class="row"><label for="eq-left">Left</label>${choose("left", mounts)}<label for="eq-right">Right</label>${choose("right", mounts)}</div>
           <div class="row"><label for="eq-head96">96-channel</label>${choose("head96", heads)}
           <label><input type="checkbox" id="eq-gripper" data-equipment="gripper" ${now.gripper ? "checked" : ""}> Gripper</label>
-          <label for="eq-trash">Trash bin</label><select id="eq-trash" data-equipment="trash">${eq.trash.map(slot => `<option ${slot === now.trash ? "selected" : ""}>${esc(slot)}</option>`).join("")}<option value="none" ${now.trash ? "" : "selected"}>none</option></select></div>
-          <p class="kind">Each pipette and the gripper is an instrument of its own (<code>${esc(current)}_left</code>, <code>${esc(current)}_gripper</code>, …); a change reaches steps after a restart.</p>`;
+          <label for="eq-trash">Trash bin</label><select id="eq-trash" data-equipment="trash">${eq.trash.map(slot => `<option ${slot === now.trash ? "selected" : ""}>${esc(slot)}</option>`).join("")}<option value="none" ${now.trash ? "" : "selected"}>none</option></select></div>`;
       }
-      if (offered.importable) {
-        // A layout someone already has: this package's file, or PyLabRobot's own.
-        html += `<div class="row"><button class="plain" id="import">Import a layout…</button><input type="file" id="importfile" accept=".json,application/json" hidden>
-          <span class="kind">a worktable file, or PyLabRobot's own (<code>deck.save</code>)</span></div>`;
-      }
-      html += `<p>${rails.length ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware onto an empty slot."} Drag what is there to move it. Click a plate or reservoir to fill its wells. Nothing on the robot moves.</p>`;
-      const deck = (layouts[current] || {}).deck || {};
+      return html;
+    }
+
+    // Everything there is to read, in one place, shown only when asked for.
+    function helpText(offered, deck) {
+      const rails = (deck.rails || []).length;
+      let html = `<div class="help"><p>${rails ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware from the list onto an empty slot."} Drag what is there to move it, × takes it off, and its name is changed in the table. Click a plate or reservoir to fill its wells. Nothing on the robot moves.</p>`;
+      if (offered.layouts) html += `<p><b>Layouts.</b> Save the worktable under a name, switch between saved ones, and Revert to go back to one as it was saved. They are files in <code>${esc(offered.layouts.folder || "")}</code>. Download gives one as a file; Import takes a worktable file, or PyLabRobot's own (<code>deck.save</code>).</p>`;
+      else if (offered.importable) html += `<p>Import takes a worktable file, or PyLabRobot's own (<code>deck.save</code>).</p>`;
+      html += `<p><b>Restart.</b> Steps offer new, removed or renamed labware${offered.equipment ? ", and a change to what is mounted," : ""} once the deck restarts. Moving labware and filling wells need none.${offered.equipment ? ` Each pipette and the gripper is an instrument of its own (<code>${esc(current)}_left</code>, <code>${esc(current)}_gripper</code>, …).` : ""}</p>`;
       const files = deck.pylabrobot_files || {};
       if (files.layout) {
         const link = (part, text) => `<a href="api/pylabrobot?worktable=${encodeURIComponent(current)}&part=${part}" download>${text}</a>`;
-        html += `<p>Also saved as PyLabRobot reads it: ${link("layout", "the layout")} (every labware, placed; <code>Deck.load_from_json_file</code>) and ${link("state", "the starting state")} (full tips and these liquids; <code>deck.load_state_from_file</code>).</p>`;
+        html += `<p><b>PyLabRobot.</b> Also saved as PyLabRobot reads it: ${link("layout", "the layout")} (<code>Deck.load_from_json_file</code>) and ${link("state", "the starting state")} (<code>deck.load_state_from_file</code>).</p>`;
       } else if (deck.pylabrobot_error) {
-        html += `<p>Not saved for PyLabRobot: ${esc(deck.pylabrobot_error)}</p>`;
+        html += `<p><b>PyLabRobot.</b> Not saved in PyLabRobot's own format: ${esc(deck.pylabrobot_error)}</p>`;
       }
-      html += `<input type="search" id="query" placeholder="Search PyLabRobot labware (e.g. 96 wellplate, tiprack 300)" value="${esc(query)}" style="width:100%"><div id="palette"></div>`;
-      $("editor").innerHTML = html;
-      renderPalette();
+      return html + `</div>`;
+    }
+
+    // Another layout is another worktable: nothing chosen on the old one carries over.
+    function useLayout(name, discard) {
+      ask = null; zoomed = null; picked = new Set();
+      return applyEdit({ action: "use_layout", name, discard });
     }
 
     const GROUPS = [["carrier", "Carriers"], ["plate", "Plates"], ["reservoir", "Reservoirs"], ["tip_rack", "Tip racks"], ["tube_rack", "Tube racks"]];
@@ -433,7 +521,8 @@
       const result = await response.json().catch(() => ({}));
       if (!response.ok) { notice = result.error || "That could not be done."; render(); return false; }
       lastResult = result;
-      if (result.restart_needed) restart = true;
+      // Whether steps still offer the worktable as it is: going back to what the deck started with needs no restart.
+      restart = ((result.layout || {}).restart_needed || []).length > 0;
       layouts = (result.layout || {}).worktables || layouts;
       catalogs = result.catalog || catalogs;
       states = (result.state || {}).worktables || states;
@@ -600,7 +689,27 @@
     document.addEventListener("click", evt => {
       const t = evt.target;
       const tab = t.closest("[data-tab]"), remove = t.closest("[data-remove]"), row = t.closest("tr[data-ware]");
-      if (t.id === "edit") { editing = !editing; notice = null; armed = null; picked = new Set(); render(); return; }
+      // Any click closes the open menu; one on an item also does what the item says.
+      if (menu && t.id !== "more") { menu = false; setTimeout(render, 0); }
+      if (t.id === "edit") { editing = !editing; notice = null; armed = null; ask = null; menu = false; picked = new Set(); render(); return; }
+      if (t.id === "more") { menu = !menu; render(); return; }
+      if (t.id === "help") { help = !help; render(); return; }
+      if (t.id === "mounted") { mounting = !mounting; render(); return; }
+      if (t.id === "askcancel") { ask = null; render(); return; }
+      if (t.id === "savelayout") { ask = null; applyEdit({ action: "save_layout" }); return; }
+      if (t.id === "saveas") { ask = { kind: "saveas", name: "" }; render(); $("layoutname").focus(); return; }
+      if (t.id === "saveasgo") {
+        const name = ask.name.trim(), taken = ((catalogs[current].layouts || {}).saved || []).some(n => n.toLowerCase() === name.toLowerCase());
+        ask = null;
+        applyEdit({ action: "save_layout", name, replace: taken });
+        return;
+      }
+      if (t.id === "revert") { ask = { kind: "revert" }; render(); return; }
+      if (t.id === "revertgo") { ask = null; zoomed = null; picked = new Set(); applyEdit({ action: "revert" }); return; }
+      if (t.id === "dellayout") { ask = { kind: "delete" }; render(); return; }
+      if (t.id === "deletego") { ask = null; applyEdit({ action: "delete_layout" }); return; }
+      if (t.id === "switchgo") { useLayout(ask.to, true); return; }
+      if (t.id === "saveswitch") { const to = ask.to; applyEdit({ action: "save_layout" }).then(ok => { if (ok) useLayout(to, false); }); return; }
       if (t.id === "dismiss") { notice = null; render(); return; }
       if (t.id === "seen") { imported = null; render(); return; }
       if (t.id === "import") { $("importfile").click(); return; }
@@ -646,6 +755,12 @@
 
     document.addEventListener("input", evt => {
       if (evt.target.id === "query") { query = evt.target.value; renderPalette(); }
+      if (evt.target.id === "layoutname" && ask) {
+        ask.name = evt.target.value;
+        const taken = ((catalogs[current].layouts || {}).saved || []).some(n => n.toLowerCase() === ask.name.trim().toLowerCase());
+        $("saveasgo").disabled = !ask.name.trim();
+        $("saveasgo").textContent = taken ? "Replace" : "Save";
+      }
       if (evt.target.id === "liquid" || evt.target.id === "volume") {
         liquid = { name: $("liquid").value, volume: $("volume").value };
         const ok = picked.size && liquid.name.trim() && Number(liquid.volume) > 0;
@@ -653,6 +768,12 @@
       }
     });
     document.addEventListener("change", evt => {
+      if (evt.target.id === "uselayout" && evt.target.value) {
+        const to = evt.target.value, deck = (layouts[current] || {}).deck || {}, now = deck.layout || {};
+        // Changes not saved, or a worktable with labware on it that was never saved, are asked about first.
+        const unsaved = now.saved ? isChanged(now) : Object.values(layouts[current].labware).some(w => w.editable);
+        if (unsaved) { ask = { kind: "switch", to }; render(); } else useLayout(to, false);
+      }
       if (evt.target.id === "deck") { zoomed = null; picked = new Set(); applyEdit({ action: "deck", deck: evt.target.value }); }
       if (evt.target.dataset && evt.target.dataset.equipment) {
         const key = evt.target.dataset.equipment;
@@ -660,6 +781,7 @@
       }
       if (evt.target.id === "importfile" && evt.target.files.length) {
         const file = evt.target.files[0];
+        evt.target.value = "";  // so choosing the same file again is a change again
         file.text().then(content => {
           zoomed = null; picked = new Set(); imported = null;
           return applyEdit({ action: "import", content, filename: file.name });
@@ -672,6 +794,8 @@
     });
     document.addEventListener("keydown", evt => {
       if (evt.key === "Enter" && evt.target.dataset && evt.target.dataset.rename !== undefined) evt.target.blur();
+      if (evt.key === "Enter" && evt.target.id === "layoutname" && !$("saveasgo").disabled) $("saveasgo").click();
+      if (evt.key === "Escape" && (ask || menu)) { ask = null; menu = false; render(); }
       if (evt.key === "Enter" && (evt.target.id === "liquid" || evt.target.id === "volume") && !$("fillit").disabled) $("fillit").click();
       if (evt.key === "Escape" && drag) { drag = null; $("ghost").hidden = true; showTarget(null); render(); }
     });
@@ -682,7 +806,7 @@
       const found = await (await fetch("api/layout")).json();
       layouts = found.worktables || {};
       // A change made before this page was opened (or reloaded) still needs the restart.
-      if ((found.restart_needed || []).length) restart = true;
+      restart = (found.restart_needed || []).length > 0;
       if (!current || !layouts[current]) current = Object.keys(layouts)[0] || null;
     }
     async function load() {

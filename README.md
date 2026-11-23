@@ -239,20 +239,47 @@ The original IvoryOS shows these arguments as text fields.
 ```
 
 in a deck file (or `ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view.plugin])`) adds it
-beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm:
+beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm.
+It shows the layout and the labware to place; the rest is under **⋯**, and **?** explains it all:
 
-- what is mounted: the pipette on each mount or the 96-channel head, the gripper, the trash slot;
+- what is mounted (**⋯ → Pipettes and gripper…**): the pipette on each mount or the 96-channel
+  head, the gripper, the trash slot;
 - drag labware from PyLabRobot's catalogue (a Flex's own tip racks, and any plate, reservoir or
   tube rack) onto an empty slot; drag what is there to move it, × to take it off, rename it in the
   list;
 - click a plate or reservoir, pick wells, and **Fill** them with a liquid and a volume: the
   `liquids` a run starts from;
-- **Import a layout…** takes a worktable file you already have; the one it replaces is kept as
+- **⋯ → Import a layout…** takes a worktable file you already have; the one it replaces is kept as
   `worktable.before-import.json`.
 
-Steps offer added, moved or renamed labware, and changed equipment, once the deck restarts (the
-panel offers the restart). The panel is the only part of this package that imports IvoryOS, and
+Steps offer added, removed or renamed labware, and changed equipment, once the deck restarts (the
+panel offers the restart). Moving labware, filling wells, and going back to the worktable the deck
+started with need no restart. The panel is the only part of this package that imports IvoryOS, and
 only IvoryOS NextGen loads it.
+
+### Saved layouts
+
+The worktable file is the layout in use. In **Edit layout**, the **Layout** row keeps others beside
+it by name:
+
+- **Save as…** saves the layout in use under a name. Once it has changed, **Save** and **Revert**
+  appear beside its name: Save keeps the changes in the layout it came from.
+- The list switches to another saved layout. If the one in use has changes that are not saved, the
+  panel asks first.
+- **Revert** goes back to the layout as it was saved. This is how a layout is changed for one
+  experiment: change it, run, revert. Until then the panel says what differs, "layout changed" or
+  "liquids changed" (topping up a reservoir is not a different layout), and the change survives a
+  restart.
+- **⋯ → Download** gives the layout as a file, which **Import a layout…** takes on another deck.
+
+Each saved layout is one worktable file in `worktable.layouts/` beside the worktable file
+(`worktable.layouts/Dye dilution.json`). They are plain files, so the folder can be kept in a git
+repository, and a file put there by hand is a saved layout like any other. `layouts_folder` puts
+the folder somewhere else, for decks that share their layouts:
+
+```python
+flex = Flex(simulated=True, layouts_folder="/labs/flex-layouts")
+```
 
 ---
 
@@ -312,7 +339,8 @@ IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
 - **PyLabRobot 1.0 only.** The 0.2 `LiquidHandler`, its worktables for the OT-2, Hamilton and Tecan
   robots, and the single-purpose devices (`Scale`, `Pump`, `PlateReader`, `Sealer`, ...) are gone:
   they wrapped PyLabRobot's older interfaces, which 1.0 keeps only as `pylabrobot.legacy`. Saved
-  workflows using them need redoing.
+  workflows using them need redoing. Where each robot is now, and what is planned:
+  [docs/liquid-handlers.md](docs/liquid-handlers.md).
 - **The Opentrons Flex**, its mounts and gripper as instruments, and a simulated Flex.
 - No steps of this package's own design: no `transfer`, no "next unused tips" from a bare rack name.
   Steps are PyLabRobot's.

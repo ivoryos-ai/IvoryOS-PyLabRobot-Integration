@@ -92,6 +92,9 @@ class Flex(WorktableRobot):
     equipment      what is mounted, when the worktable file does not say: {"left": "p1000_multi_flex",
                    "right": "p50_single_flex", "gripper": true, "trash": "A3"} (FLEX_PIPETTES).
                    The file says it from then on.
+    layouts_folder where layouts saved by name are kept (worktable.py). Optional: it defaults to
+                   worktable.layouts beside the worktable file. Give a folder to share saved layouts
+                   between decks, or to keep them in a repository.
     step_delay_s   a pause after each step, simulated only, so a run can be watched
     command_timeout  seconds PyLabRobot waits for one robot command
     tracking       PyLabRobot's tip and volume tracking. On, an aspirate from a well nobody filled is
@@ -103,13 +106,13 @@ class Flex(WorktableRobot):
     def __init__(self, host: Optional[str] = None, port: int = 31950, serial_port: Optional[str] = None,
                  simulated: bool = False, worktable: Optional[str] = None,
                  equipment: Optional[Dict[str, Any]] = None, step_delay_s: float = 0.0,
-                 command_timeout: float = 30.0, tracking: bool = True):
+                 command_timeout: float = 30.0, tracking: bool = True, layouts_folder: Optional[str] = None):
         if not simulated and not host and not serial_port:
             raise ValueError("Give the Flex's host (or serial_port), or simulated=True.")
         if simulated and (host or serial_port):
             raise ValueError("simulated=True runs no robot, so a host or serial_port beside it would be ignored. "
                              "Turn simulated off to use that robot, or leave them out to simulate.")
-        super().__init__(worktable, "FlexDeck", simulated, step_delay_s, tracking)
+        super().__init__(worktable, "FlexDeck", simulated, step_delay_s, tracking, layouts_folder)
         self._host, self._port, self._serial_port = host, int(port), serial_port
         self._command_timeout = float(command_timeout)
         # What is mounted: the file's, once there is one; else what was given; else (simulated)
@@ -247,7 +250,20 @@ class Flex(WorktableRobot):
         return self._plr
 
     def _attach_deck(self, deck) -> None:
-        self._plr.attach_deck(deck)
+        if self._simulated:
+            self._plr = self._make_plr()  # a simulated robot with what this worktable says is mounted
+        else:
+            self._plr.attach_deck(deck)
+
+    def _checked(self, config: dict) -> dict:
+        """A layout from a file says what is mounted too: refuse what a Flex cannot have here,
+        not when the deck next starts."""
+        config["equipment"] = check_equipment(config.get("equipment") or self.equipment)
+        return config
+
+    def _parts_read(self) -> Any:
+        # The instruments this Flex is split into are made once, from what is mounted.
+        return sorted((part, str(name)) for part, name in self.equipment.items() if part != "trash")
 
     def _head(self, part: str):
         head = getattr(self._plr, part, None)

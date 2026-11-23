@@ -8,23 +8,33 @@ wells show what they hold, tip racks which tips are left, and the wells a step i
 up while it runs. With "Edit layout" it changes the worktable the way a person changes the real
 one, saved to its worktable file: what is mounted on the robot, drag labware from PyLabRobot's
 catalogue onto a place (or a carrier onto the tracks), drag what is there to move it, rename or
-remove it, fill wells with a liquid, or import a layout someone already has. Nothing moves.
+remove it, fill wells with a liquid, or import a layout someone already has. A layout is saved
+under a name, switched to, gone back to as it was saved, and downloaded as a file. Nothing moves.
 
 Only IvoryOS NextGen loads this module, and it provides `ivoryos_edge`; the rest of plr-ivoryos
 does not import it. Served at /plugins/labware/ (page), /plugins/labware/api/{layout,state,
-catalog,edit} and /plugins/labware/events.
+catalog,edit,export} and /plugins/labware/events.
 """
 
+import json
 import os
+from typing import Optional
+from urllib.parse import quote
 
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from ivoryos_edge.plugins import Plugin
 
 plugin = Plugin("Labware", id="labware", page="page", placement="panel-right", icon="grid-3x3")
 
 # Worktables changed since this process started: steps offer the change only after a restart, and a
-# page opened (or reloaded) in between should still say so.
+# page opened (or reloaded) in between should still say so. Only for a worktable that does not say
+# itself whether it still is what the deck started with (`deck.restart_needed`).
 _restart_pending: set = set()
+
+
+def _needs_restart(name: str, found: dict) -> bool:
+    told = (found.get("deck") or {}).get("restart_needed")
+    return told if isinstance(told, bool) else name in _restart_pending
 
 
 def _call(instrument, method: str, *args):
@@ -50,8 +60,9 @@ def _worktables() -> dict:
 
 
 def layout() -> dict:
-    return {"worktables": {name: found for name, (_, found) in _worktables().items()},
-            "restart_needed": sorted(_restart_pending)}
+    worktables = {name: found for name, (_, found) in _worktables().items()}
+    return {"worktables": worktables,
+            "restart_needed": sorted(name for name, found in worktables.items() if _needs_restart(name, found))}
 
 
 def state() -> dict:
@@ -66,7 +77,8 @@ def _start(instruments):
             # A change to the worktable itself means the page reads the layout again.
             plugin.publish({"worktable": name, "event": event,
                             "state": _call(instrument, "__ivoryos_labware_state__") or {},
-                            "relayout": event.get("action") in ("move", "layout")})
+                            # "load" too: filling wells changes whether a saved layout still matches.
+                            "relayout": event.get("action") in ("move", "layout", "load")})
 
         _call(instrument, "__ivoryos_labware_events__", on_event)
 
@@ -90,6 +102,23 @@ def get_pylabrobot(worktable: str, part: str = "layout"):
     if not path or not os.path.exists(path):
         return JSONResponse(status_code=404, content={"error": "There is no PyLabRobot file for this worktable."})
     return FileResponse(path, media_type="application/json", filename=os.path.basename(path))
+
+
+@plugin.router.get("/api/export")
+def get_export(worktable: str, layout: Optional[str] = None):
+    """A layout as a file, as a download: the one in use, or a saved one by name. It is the file
+    "Import a layout" takes."""
+    found = _worktables().get(worktable)
+    give = getattr(found[0], "__ivoryos_labware_export__", None) if found else None
+    if not callable(give):
+        return JSONResponse(status_code=404, content={"error": "This worktable cannot be downloaded."})
+    try:
+        result = give(layout or None)
+    except ValueError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    filename = str(result.get("filename") or "worktable.json")
+    return Response(json.dumps(result.get("layout") or {}, indent=2) + "\n", media_type="application/json",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
 
 
 @plugin.router.get("/api/catalog")
@@ -119,6 +148,7 @@ def edit(change: dict):
     result = result if isinstance(result, dict) else {}
     if result.get("restart", True):
         _restart_pending.add(str(change.get("worktable")))
-    return {"layout": layout(), "catalog": get_catalog()["worktables"], "state": state(),
-            "restart_needed": bool(result.get("restart", True)), "name": result.get("name"),
+    now = layout()
+    return {"layout": now, "catalog": get_catalog()["worktables"], "state": state(),
+            "restart_needed": str(change.get("worktable")) in now["restart_needed"], "name": result.get("name"),
             "kept": os.path.basename(result["kept"]) if result.get("kept") else None}
