@@ -256,7 +256,7 @@ def test_every_steps_defaults_are_data_ivoryos_can_keep():
 def test_a_coordinate_or_enum_given_as_data_reaches_pylabrobot_as_its_own():
     lh = Vantage(simulated=True)
     try:
-        lh.move_plate(plate="sample_plate", to="plate_carrier-4", pickup_direction="FRONT",
+        lh.move_plate(plate="sample_plate", to="plate_carrier-4", pickup_direction="FRONT", drop_direction=1,
                       destination_offset={"x": 0, "y": 0, "z": 0})
         assert lh._place_of(lh.deck.get_resource("sample_plate")) == "plate_carrier-4"
     finally:

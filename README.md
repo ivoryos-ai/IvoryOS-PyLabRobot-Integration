@@ -303,8 +303,8 @@ IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
   not offered as steps on a robot that is itself a resource.
 - The simulated robot-server remembers where each pipette was sent, so a position query answers it.
 - A default PyLabRobot gives as a `Coordinate` or an enum (`offset=Coordinate(0, 0, 0)`,
-  `direction=GripDirection.FRONT`) is shown to IvoryOS as data (`{"x": 0, "y": 0, "z": 0}`,
-  `"FRONT"`) and made PyLabRobot's again when the step runs: IvoryOS NextGen stores a deck's steps
+  `direction=GripDirection.FRONT`) is shown to IvoryOS as data (`{"x": 0, "y": 0, "z": 0}`, the
+  enum's value; its name is taken too) and made PyLabRobot's again when the step runs: IvoryOS NextGen stores a deck's steps
   as JSON, and could not record a deck that had one.
 
 ### What changed in 1.0.0b1

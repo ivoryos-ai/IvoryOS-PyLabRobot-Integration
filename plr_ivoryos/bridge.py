@@ -250,7 +250,9 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
             return Param(param.name, param.kind, default, Optional[arm] if optional else arm, _dataclass_value(arm))
         if inspect.isclass(arm) and issubclass(arm, enum.Enum):
             if isinstance(default, enum.Enum):
-                default = default.name  # GripDirection.FRONT is shown as "FRONT", for the same reason
+                # GripDirection.FRONT is shown as its value (1), as IvoryOS lists an enum's choices;
+                # its name is taken too.
+                default = default.value if isinstance(default.value, (str, int, float, bool)) else default.name
             return Param(param.name, param.kind, default, hint, _enum_value(arm))
         origin = typing.get_origin(arm)
         if arm in (dict, list) or origin in (dict, list, collections.abc.Mapping):
