@@ -145,14 +145,37 @@ def _dataclass_value(cls):
     return convert
 
 
+def _enum_value(cls):
+    """A member of `cls` from itself, its name ("FRONT") or its value (1)."""
+    def convert(value, resolver):
+        if value is None or isinstance(value, cls):
+            return value
+        if isinstance(value, str) and value.strip() in cls.__members__:
+            return cls[value.strip()]
+        try:
+            return cls(value)
+        except ValueError:
+            pass
+        if isinstance(value, str):
+            try:
+                return cls(int(value))
+            except (ValueError, TypeError):
+                pass
+        raise ValueError(f"expected one of {', '.join(cls.__members__)}")
+    return convert
+
+
 def _resource_value(arms: List[ResourceArm], what: str):
     """Text naming labware or wells -> the PyLabRobot object(s) the method takes."""
     def convert(value, resolver):
         if value is None or value == "" or value == []:
             return None
-        bare = resolver._bare_name(value)
+        if isinstance(value, str) and not any(c in value for c in "[],"):
+            bare = value.strip()  # also a carrier position, "plate_carrier-0", which is no labware name
+        else:
+            bare = resolver._bare_name(value)
         if bare is not None:
-            resource = resolver._labware(bare)
+            resource = resolver._named(bare)  # a labware, the trash, or a place on the worktable
             for arm in arms:
                 if not arm.many and isinstance(resource, arm.cls) and not isinstance(resource, _ITEMS):
                     return resource
@@ -184,11 +207,14 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
         inner = _sequence_of(arm)
         if _is_resource_class(arm):
             resource_arms.append(ResourceArm(arm))
-        elif inner is not None and _is_resource_class(inner):
-            resource_arms.append(ResourceArm(inner, many=True))
+        elif inner is not None:
+            # Sequence[Union[TipSpot, Trash]] or Sequence[Union[TipSpot, Coordinate]]: several of
+            # whichever labware it takes. A coordinate in it is not offered (see below).
+            resource_arms.extend(ResourceArm(a, many=True) for a in _arms(inner) if _is_resource_class(a))
     if resource_arms:
-        if len(resource_arms) != len(arms):
-            raise Unsupported(f"{param.name} mixes labware with other kinds of value")
+        # An argument that takes labware or something else (`to: Union[ResourceHolder, Coordinate]`,
+        # `destinations: Sequence[Union[TipSpot, Coordinate]]`) is offered as the labware: the
+        # worktable names what a step works on, and a bare coordinate is what a form cannot check.
         cats: List[str] = []
         for arm in resource_arms:
             for cat in _categories(arm.cls):
@@ -207,6 +233,9 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
         if all(issubclass(a.cls, Trash) for a in resource_arms) and default is inspect.Parameter.empty:
             default, filled = "trash", True  # the robot's trash bin, which is what a Flex's is called
         return Param(param.name, param.kind, default, annotation, _resource_value(resource_arms, param.name), filled)
+    plain = (str, int, float, bool)
+    if len(arms) > 1 and all(a in plain or typing.get_origin(a) is typing.Literal for a in arms):
+        return Param(param.name, param.kind, default, hint, _plain)  # Union[str, float], Union[float, Literal[...]]
     if len(arms) == 1:
         arm = arms[0]
         inner = _sequence_of(arm)
@@ -214,7 +243,15 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
             annotation = Optional[List[inner]] if optional else List[inner]
             return Param(param.name, param.kind, default, annotation, _number_list(inner))
         if dataclasses.is_dataclass(arm) and inspect.isclass(arm):
+            # A default such as Coordinate(0, 0, 0) is shown as its fields, which IvoryOS can keep
+            # (it stores defaults as JSON); the fields are made a Coordinate again when given.
+            if dataclasses.is_dataclass(default) and not isinstance(default, type):
+                default = dataclasses.asdict(default)
             return Param(param.name, param.kind, default, Optional[arm] if optional else arm, _dataclass_value(arm))
+        if inspect.isclass(arm) and issubclass(arm, enum.Enum):
+            if isinstance(default, enum.Enum):
+                default = default.name  # GripDirection.FRONT is shown as "FRONT", for the same reason
+            return Param(param.name, param.kind, default, hint, _enum_value(arm))
         origin = typing.get_origin(arm)
         if arm in (dict, list) or origin in (dict, list, collections.abc.Mapping):
             return Param(param.name, param.kind, default, hint, _json_value)
@@ -380,9 +417,15 @@ def add_steps(cls: type, source: type, owner: str, *, include: Optional[Iterable
     methods left out and why. A method `cls` defines itself is kept."""
     skipped: Dict[str, str] = {}
     names = list(include) if include is not None else sorted(dir(source))
+    # A robot that is itself a PyLabRobot resource (a STAR, a Prep, the legacy LiquidHandler) has
+    # the resource tree's methods too (serialize, assign_child_resource, ...): not operations.
+    tree = set(dir(Resource)) if include is None and inspect.isclass(source) and issubclass(source, Resource) \
+        else set()
     for name in names:
-        if name.startswith("_") or name in exclude:
+        if name.startswith("_") or name in exclude or name in tree:
             continue
+        if inspect.isclass(inspect.getattr_static(source, name, None)):
+            continue  # a nested class or enum PyLabRobot hangs on the class (`LLDMode`)
         member = inspect.getattr_static(source, name, None)
         if member is None or isinstance(member, property) or not callable(getattr(source, name)):
             continue

@@ -18,7 +18,7 @@ import os
 import re
 from typing import Annotated, Any, Callable, Dict, List, Optional, Union
 
-from pylabrobot.resources import (Carrier, Container, ItemizedResource, Plate, ResourceHolder, TipRack, Trash,
+from pylabrobot.resources import (Carrier, Container, Deck, ItemizedResource, Plate, ResourceHolder, TipRack, Trash,
                                   set_tip_tracking, set_volume_tracking)
 
 from plr_ivoryos import bridge, liquids, worktable
@@ -42,8 +42,18 @@ def category_of(resource) -> str:
     return str(getattr(resource, "category", None) or "rack")
 
 
+def _deck_of(resource):
+    while resource is not None and not isinstance(resource, Deck):
+        resource = resource.parent
+    return resource
+
+
 def _box(resource) -> Dict[str, float]:
-    at = resource.get_absolute_location()
+    """Where a resource is on its deck, from the deck's front left. PyLabRobot 1.0 puts a STAR's or
+    a Prep's deck inside the device, so absolute positions are the device's, not the deck's."""
+    deck = _deck_of(resource)
+    at = resource.get_location_wrt(deck) if deck is not None and deck is not resource \
+        else resource.get_absolute_location()
     return {"x": round(at.x, 2), "y": round(at.y, 2),
             "w": round(resource.get_absolute_size_x(), 2), "h": round(resource.get_absolute_size_y(), 2)}
 
@@ -70,6 +80,36 @@ def worktable_path(path: Optional[str]) -> str:
 
 def _a(word: str) -> str:
     return "an" if word[:1].upper() in "AEIOU" else "a"
+
+
+def mounted_tips(head) -> List[bool]:
+    """Which channels of a PyLabRobot head or pipette hold a tip, whatever the robot calls it:
+    `get_mounted_tips()` (Flex, Prep), `get_mounted_tip(channel)` (STAR channels), the 96-head's
+    own list, or `has_tip` (an OT-2 pipette)."""
+    for name in ("get_mounted_tips", "_get_mounted_tips"):
+        read = getattr(head, name, None)
+        if callable(read):
+            try:
+                return [tip is not None for tip in read()]
+            except Exception:
+                pass
+    read = getattr(head, "get_mounted_tip", None)
+    channels = getattr(head, "num_channels", None)
+    if callable(read) and isinstance(channels, int):
+        out = []
+        for channel in range(channels):
+            try:
+                out.append(read(channel) is not None)
+            except Exception:
+                break
+        return out
+    tips = getattr(head, "_tips", None)
+    if isinstance(tips, (list, tuple)):
+        return [tip is not None for tip in tips]
+    has = getattr(head, "has_tip", None)
+    if isinstance(has, bool):
+        return [has]
+    return []
 
 
 class WorktableRobot:
@@ -105,6 +145,7 @@ class WorktableRobot:
         self._ready = False
         self._setting_up: Optional[asyncio.Lock] = None
         self._kept: Optional[str] = None
+        self._parts: Dict[str, Any] = {}
         self.deck = worktable.build_deck(self._config)
 
     def _after_init(self) -> None:
@@ -155,12 +196,30 @@ class WorktableRobot:
     async def _disconnect(self) -> None:
         """Hand the robot back (a fresh session starts at the next step)."""
 
+    def __ivoryos_instruments__(self) -> Dict[str, Any]:
+        """The instruments this robot is in IvoryOS besides itself: each thing fitted to it that
+        PyLabRobot 1.0 gives a class of its own (a pipette mount, a 96-head, a gripper arm). IvoryOS
+        names each after the robot: `star_pipettes`, `flex_left`, ..."""
+        return dict(self._parts)
+
+    def _part_target(self, part: str):
+        """The PyLabRobot object a part's steps run on (`star.pipettes`, `ot2.left_pipette`)."""
+        found = getattr(self._plr, part, None)
+        if found is None:
+            raise RuntimeError(f"The robot has no {part.replace('_', ' ')}.")
+        return found
+
     def _tip_count(self, part: Optional[str]) -> int:
         """Tips on that part's head now (0 for a part with no head)."""
-        return 0
+        if part not in self._parts:
+            return 0
+        try:
+            return sum(mounted_tips(self._part_target(part)))
+        except Exception:
+            return 0
 
     def _any_tips(self) -> bool:
-        return False
+        return any(self._tip_count(part) for part in self._parts)
 
     async def _setup(self) -> None:
         if self._ready:
@@ -332,6 +391,16 @@ class WorktableRobot:
             return {"labware": out, "channels": self._channels_state()}
 
     def _channels_state(self) -> List[bool]:
+        """Which channels hold a tip, for the Labware view: the first part that has channels."""
+        if not self._ready:
+            return []
+        for part in self._parts:
+            try:
+                found = mounted_tips(self._part_target(part))
+            except Exception:
+                continue
+            if found:
+                return found
         return []
 
     def __ivoryos_labware_events__(self, callback) -> None:
@@ -359,6 +428,17 @@ class WorktableRobot:
         if name not in found:
             raise ValueError(f"'{name}' is not on this worktable (it has: {', '.join(found) or 'nothing'})")
         return found[name]
+
+    def _named(self, name: str):
+        """What a bare name in a step stands for: a labware (or the trash), else a place a labware
+        can sit (`C1`, a carrier position), for a step that moves labware there."""
+        if name in self._labware_map(with_trash=True):
+            return self._labware(name)
+        sites = self._site_map()
+        key = name.upper() if worktable.is_flex(self.deck) else name
+        if key in sites:
+            return sites[key]
+        return self._labware(name)  # not there: say what is
 
     def _items(self, value, categories=()) -> List[tuple]:
         """(labware, well, the PyLabRobot well, tip spot or container) for every well `value` names,
@@ -583,7 +663,7 @@ class WorktableRobot:
         return holder
 
     def _rails(self, rails) -> int:
-        count = getattr(self.deck, "num_tracks", None)
+        count = worktable.num_rails(self.deck)
         if not count:
             raise ValueError("This worktable has slots, not tracks: put labware in a slot.")
         try:
@@ -596,7 +676,7 @@ class WorktableRobot:
 
     def _on_deck(self, resource, rails: int) -> None:
         try:
-            self.deck.assign_child_resource(resource, track=rails)
+            worktable.on_rails(self.deck, resource, rails)
         except ValueError as e:  # PyLabRobot: "Location ... is already occupied by resource 'x'"
             raise ValueError(f"It does not fit at track {rails}: {e}") from None
 
@@ -605,7 +685,7 @@ class WorktableRobot:
         carrier = holder.parent if isinstance(holder.parent, Carrier) else None
         if carrier is None:
             label = worktable.slot_label(holder)
-            slot = label if worktable.is_flex(self.deck) else int(label)
+            slot = label if worktable.is_flex(self.deck) else int(label)  # an OT-2's or a Prep's is a number
             self._config.setdefault("resources", []).append({**entry, "slot": slot})
             return
         parent, _, _ = worktable.find(self._config, carrier.name)
@@ -812,3 +892,36 @@ def _per_well(value, count: int, what: str) -> List[float]:
         return [float(v) for v in values]
     except (TypeError, ValueError):
         raise ValueError(f"{what} must be a number, or one number per well") from None
+
+
+class Part:
+    """Something fitted to a robot that PyLabRobot 1.0 gives a class of its own (a pipette mount,
+    a 96-head, a gripper arm), as an IvoryOS instrument. Its steps are that class's methods
+    (bridge.add_steps on a subclass), run on the robot's PyLabRobot object for it. It reports the
+    robot's labware without the deck, so its steps get labware choices and well pickers while the
+    worktable is drawn once."""
+
+    def __init__(self, robot: "WorktableRobot", part: str):
+        self._robot = robot
+        self._part = part
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self._part}>"
+
+    def __ivoryos_labware__(self) -> dict:
+        return self._robot._part_layout()
+
+    def _target(self):
+        return self._robot._part_target(self._part)
+
+    def _run_step(self, name: str, given: Dict[str, Any], extra: Dict[str, Any], params: Dict[str, bridge.Param]):
+        return self._robot._execute(self._part, self._target, name, given, extra, params)
+
+
+def part_class(name: str, source: type, doc: str, module: str, base: type = None, **steps) -> type:
+    """A Part subclass (of `base`, Part by default) named `name` in `module`, with `source`'s
+    methods as steps; `steps` go to bridge.add_steps. The methods left out, and why, are on the
+    class as _SKIPPED."""
+    cls = type(name, (base or Part,), {"__doc__": doc, "__module__": module})
+    cls._SKIPPED = bridge.add_steps(cls, source, source.__name__, **steps)
+    return cls

@@ -211,17 +211,18 @@
       $("edit").textContent = editing ? "Done" : "Edit layout";
       renderNotes();
       if (!current || !layouts[current]) {
-        $("stage").innerHTML = `<div class="empty">No instrument on this deck reports a worktable.<br>A plr-ivoryos robot (an Opentrons Flex) does.</div>`;
+        $("stage").innerHTML = `<div class="empty">No instrument on this deck reports a worktable.<br>A plr-ivoryos robot (a Flex, OT-2, STAR, Prep, Nimbus, Vantage or EVO) does.</div>`;
         $("kind").textContent = "";
         $("legend").innerHTML = $("list").innerHTML = $("fill").innerHTML = "";
         return;
       }
       const layout = layouts[current], state = (states[current] || {}).labware || {};
       $("title").textContent = current;
-      // What is mounted (a Flex): each one is an instrument of its own.
+      // What is fitted (a pipette per mount, a 96-head, a gripper, an iSWAP, ...): each one is an
+      // instrument of its own. A pipette is named; a part that is simply there is listed.
       const fitted = layout.deck.equipment || {}, fittedLabels = fitted.labels || {};
-      const mounted = ["left", "right", "head96"].filter(k => fitted[k]).map(k => `${k}: ${fittedLabels[k] || fitted[k]}`);
-      if (fitted.gripper) mounted.push("gripper");
+      const mounted = Object.keys(fitted).filter(k => k !== "labels" && k !== "trash" && fitted[k])
+        .map(k => fitted[k] === true ? k.replace(/_/g, " ") : `${k}: ${fittedLabels[k] || fitted[k]}`);
       $("kind").textContent = (layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : "")
         + (mounted.length ? " · " + mounted.join(", ") : "");
       if (zoomed && !layout.labware[zoomed]) zoomed = null;
