@@ -242,11 +242,12 @@ in a deck file (or `ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view
 beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm.
 It shows the layout and the labware to place; the rest is under **⋯**, and **?** explains it all:
 
-- what is mounted (**⋯ → Pipettes and gripper…**): the pipette on each mount or the 96-channel
-  head, the gripper, the trash slot;
-- drag labware from PyLabRobot's catalogue (a Flex's own tip racks, and any plate, reservoir or
-  tube rack) onto an empty slot; drag what is there to move it, × to take it off, rename it in the
-  list;
+- on a Flex, what is mounted (**⋯ → Pipettes and gripper…**): the pipette on each mount or the
+  96-channel head, the gripper, the trash slot; on a robot with several worktables (a STAR,
+  STARlet or STARplus, an EVO 100, 150 or 200), which one (**⋯ → Robot…**);
+- drag labware from PyLabRobot's catalogue (the robot's own tip racks and carriers, and any plate,
+  reservoir or tube rack) onto an empty slot or carrier position; drag what is there to move it,
+  × to take it off, rename it in the list;
 - click a plate or reservoir, pick wells, and **Fill** them with a liquid and a volume: the
   `liquids` a run starts from;
 - **⋯ → Import a layout…** takes a worktable file you already have; the one it replaces is kept as
@@ -333,13 +334,16 @@ IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
   `direction=GripDirection.FRONT`) is shown to IvoryOS as data (`{"x": 0, "y": 0, "z": 0}`, the
   enum's value; its name is taken too) and made PyLabRobot's again when the step runs: IvoryOS NextGen stores a deck's steps
   as JSON, and could not record a deck that had one.
+- **Saved layouts** in the Labware panel (below *The Labware panel*), on every robot: save a
+  worktable under a name, switch, revert, download; `layouts_folder` on each robot.
 
 ### What changed in 1.0.0b1
 
 - **PyLabRobot 1.0 only.** The 0.2 `LiquidHandler`, its worktables for the OT-2, Hamilton and Tecan
   robots, and the single-purpose devices (`Scale`, `Pump`, `PlateReader`, `Sealer`, ...) are gone:
   they wrapped PyLabRobot's older interfaces, which 1.0 keeps only as `pylabrobot.legacy`. Saved
-  workflows using them need redoing. Where each robot is now, and what is planned:
+  workflows using them need redoing (1.0.0b2 brings the liquid handlers back on PyLabRobot 1.0).
+  Where each robot is now:
   [docs/liquid-handlers.md](docs/liquid-handlers.md).
 - **The Opentrons Flex**, its mounts and gripper as instruments, and a simulated Flex.
 - No steps of this package's own design: no `transfer`, no "next unused tips" from a bare rack name.

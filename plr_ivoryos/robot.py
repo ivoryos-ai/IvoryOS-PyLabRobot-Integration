@@ -183,8 +183,9 @@ class WorktableRobot:
         return labware, sorted(self._site_map()), self._parts_read()
 
     def _parts_read(self) -> Any:
-        """What the robot's instruments were made from (a subclass's equipment)."""
-        return None
+        """What the robot's instruments were made from: what the worktable says is fitted (a
+        subclass may narrow it, as a Flex leaves out its trash)."""
+        return sorted((part, str(value)) for part, value in (self._config.get("equipment") or {}).items())
 
     def _restart_needed(self) -> bool:
         return self._started_with is not None and self._steps_read() != self._started_with

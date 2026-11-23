@@ -54,18 +54,21 @@ class Prep(WorktableRobot):
     equipment      what is fitted, for a real Prep when the file does not say (it is asked otherwise)
     step_delay_s   a pause after each step, simulated only
     tracking       PyLabRobot's tip and volume tracking
+    layouts_folder where layouts saved by name are kept; optional, worktable.layouts beside the
+                   worktable file (see Flex)
     """
 
     KINDS = ["PrepDeck"]
 
     def __init__(self, host: Optional[str] = None, port: int = 2000, simulated: bool = False,
                  worktable: Optional[str] = None, equipment: Optional[Dict[str, Any]] = None,
-                 step_delay_s: float = 0.0, tracking: bool = True):
+                 step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         if not simulated and not host:
             raise ValueError("Give the Prep's host, or simulated=True.")
         if simulated and host:
             raise ValueError("simulated=True runs no robot, so a host beside it would be ignored.")
-        super().__init__(worktable, "PrepDeck", simulated, step_delay_s, tracking)
+        super().__init__(worktable, "PrepDeck", simulated, step_delay_s, tracking, layouts_folder)
         self._host, self._port = host, int(port)
         found = None if self._new_file else self._config.get("equipment")
         if simulated:
@@ -123,6 +126,12 @@ class Prep(WorktableRobot):
 
     def _attach_deck(self, deck) -> None:
         self._plr = self._make_plr(deck)
+
+    def _checked(self, config: dict) -> dict:
+        """A layout from a file says what is fitted too: refuse what this robot cannot have, not
+        when the deck next starts."""
+        config["equipment"] = check_equipment(config.get("equipment") or self.equipment)
+        return config
 
     def setup(self) -> None:
         """Connect and initialize the Prep, checking what is fitted against the worktable file. Any

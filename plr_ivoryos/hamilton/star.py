@@ -88,14 +88,17 @@ class STAR(WorktableRobot):
     device_address / serial_number   which STAR on USB, when there is more than one
     step_delay_s   a pause after each step, simulated only, so a run can be watched
     tracking       PyLabRobot's tip and volume tracking
+    layouts_folder where layouts saved by name are kept; optional, worktable.layouts beside the
+                   worktable file (see Flex)
     """
 
     KINDS = ["STARLetDeck", "STARDeck", "STARPlusDeck"]
 
     def __init__(self, simulated: bool = False, worktable: Optional[str] = None, deck_type: Optional[str] = None,
                  equipment: Optional[Dict[str, Any]] = None, device_address: Optional[int] = None,
-                 serial_number: Optional[str] = None, step_delay_s: float = 0.0, tracking: bool = True):
-        super().__init__(worktable, deck_type, simulated, step_delay_s, tracking)
+                 serial_number: Optional[str] = None, step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
+        super().__init__(worktable, deck_type, simulated, step_delay_s, tracking, layouts_folder)
         self._device_address, self._serial_number = device_address, serial_number
         found = None if self._new_file else self._config.get("equipment")
         wanted = check_equipment(found or equipment or {}) if (found or equipment) else None
@@ -171,6 +174,12 @@ class STAR(WorktableRobot):
 
     def _attach_deck(self, deck) -> None:
         self._plr = self._make_plr(deck)  # PyLabRobot 1.0 makes the deck a child of the device
+
+    def _checked(self, config: dict) -> dict:
+        """A layout from a file says what is fitted too: refuse what this robot cannot have, not
+        when the deck next starts."""
+        config["equipment"] = check_equipment(config.get("equipment") or self.equipment)
+        return config
 
     def setup(self) -> None:
         """Connect and initialize the STAR, and find what is fitted, checking it against the

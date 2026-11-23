@@ -45,6 +45,8 @@ class LiquidHandler(WorktableRobot):
     deck_type      which worktable a new file is (one of KINDS)
     step_delay_s   a pause after each step, simulated only
     tracking       PyLabRobot's tip and volume tracking
+    layouts_folder where layouts saved by name are kept; optional, worktable.layouts beside the
+                   worktable file (see Flex)
     """
 
     # Any worktable but the Flex's (PyLabRobot's legacy front end has no Flex backend); a STARlet by
@@ -52,12 +54,13 @@ class LiquidHandler(WorktableRobot):
     KINDS = ["STARLetDeck"] + [kind for kind in worktable.DECKS if kind not in ("FlexDeck", "STARLetDeck")]
 
     def __init__(self, backend=None, simulated: bool = False, channels: int = 8, worktable: Optional[str] = None,
-                 deck_type: Optional[str] = None, step_delay_s: float = 0.0, tracking: bool = True):
+                 deck_type: Optional[str] = None, step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         if backend is None and not simulated:
             raise ValueError("Give a pylabrobot.legacy backend, or simulated=True.")
         if backend is not None and simulated:
             raise ValueError("simulated=True runs no robot, so a backend beside it would be ignored.")
-        super().__init__(worktable, deck_type, simulated, step_delay_s, tracking)
+        super().__init__(worktable, deck_type, simulated, step_delay_s, tracking, layouts_folder)
         self._channels = int(channels)
         self._backend = backend
         self._plr = self._make_plr()
@@ -115,7 +118,8 @@ class Nimbus(LiquidHandler):
     KINDS = ["NimbusDeck"]
 
     def __init__(self, host: Optional[str] = None, port: int = 2000, simulated: bool = False,
-                 worktable: Optional[str] = None, channels: int = 8, step_delay_s: float = 0.0, tracking: bool = True):
+                 worktable: Optional[str] = None, channels: int = 8, step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         backend = None
         if host and not simulated:
             from pylabrobot.legacy.liquid_handling.backends.hamilton.nimbus_backend import NimbusBackend
@@ -124,7 +128,7 @@ class Nimbus(LiquidHandler):
             raise ValueError("Give the Nimbus's host, or simulated=True.")
         elif host:
             raise ValueError("simulated=True runs no robot, so a host beside it would be ignored.")
-        super().__init__(backend, simulated, channels, worktable, "NimbusDeck", step_delay_s, tracking)
+        super().__init__(backend, simulated, channels, worktable, "NimbusDeck", step_delay_s, tracking, layouts_folder)
 
 
 class Vantage(LiquidHandler):
@@ -134,12 +138,12 @@ class Vantage(LiquidHandler):
 
     def __init__(self, simulated: bool = False, worktable: Optional[str] = None, device_address: Optional[int] = None,
                  serial_number: Optional[str] = None, channels: int = 8, step_delay_s: float = 0.0,
-                 tracking: bool = True):
+                 tracking: bool = True, layouts_folder: Optional[str] = None):
         backend = None
         if not simulated:
             from pylabrobot.legacy.liquid_handling.backends import VantageBackend
             backend = VantageBackend(device_address=device_address, serial_number=serial_number)
-        super().__init__(backend, simulated, channels, worktable, "VantageDeck", step_delay_s, tracking)
+        super().__init__(backend, simulated, channels, worktable, "VantageDeck", step_delay_s, tracking, layouts_folder)
 
 
 class EVO(LiquidHandler):
@@ -151,12 +155,13 @@ class EVO(LiquidHandler):
     KINDS = ["EVO150Deck", "EVO100Deck", "EVO200Deck"]
 
     def __init__(self, simulated: bool = False, worktable: Optional[str] = None, deck_type: Optional[str] = None,
-                 diti_count: int = 0, channels: int = 8, step_delay_s: float = 0.0, tracking: bool = True):
+                 diti_count: int = 0, channels: int = 8, step_delay_s: float = 0.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         backend = None
         if not simulated:
             from pylabrobot.legacy.liquid_handling.backends import EVOBackend
             backend = EVOBackend(diti_count=diti_count)
-        super().__init__(backend, simulated, channels, worktable, deck_type, step_delay_s, tracking)
+        super().__init__(backend, simulated, channels, worktable, deck_type, step_delay_s, tracking, layouts_folder)
 
 
 # Labware a step moves, and where to.

@@ -60,19 +60,22 @@ class OT2(WorktableRobot):
     step_delay_s   a pause after each step, simulated only
     command_timeout  seconds PyLabRobot waits for one robot command
     tracking       PyLabRobot's tip and volume tracking
+    layouts_folder where layouts saved by name are kept; optional, worktable.layouts beside the
+                   worktable file (see Flex)
     """
 
     KINDS = ["OTDeck"]
 
     def __init__(self, host: Optional[str] = None, port: int = 31950, simulated: bool = False,
                  worktable: Optional[str] = None, equipment: Optional[Dict[str, Any]] = None,
-                 step_delay_s: float = 0.0, command_timeout: float = 30.0, tracking: bool = True):
+                 step_delay_s: float = 0.0, command_timeout: float = 30.0, tracking: bool = True,
+                 layouts_folder: Optional[str] = None):
         if not simulated and not host:
             raise ValueError("Give the OT-2's host, or simulated=True.")
         if simulated and host:
             raise ValueError("simulated=True runs no robot, so a host beside it would be ignored. Turn simulated off "
                              "to use that robot, or leave the host out to simulate.")
-        super().__init__(worktable, "OTDeck", simulated, step_delay_s, tracking)
+        super().__init__(worktable, "OTDeck", simulated, step_delay_s, tracking, layouts_folder)
         self._host, self._port, self._command_timeout = host, int(port), float(command_timeout)
         found = None if self._new_file else self._config.get("equipment")
         if found or equipment:
@@ -146,6 +149,12 @@ class OT2(WorktableRobot):
 
     def _attach_deck(self, deck) -> None:
         self._plr = self._make_plr()
+
+    def _checked(self, config: dict) -> dict:
+        """A layout from a file says what is fitted too: refuse what this robot cannot have, not
+        when the deck next starts."""
+        config["equipment"] = check_equipment(config.get("equipment") or self.equipment)
+        return config
 
     def setup(self, skip_home: bool = False) -> None:
         """Connect, start a run, find what is mounted (checking it against the worktable file) and
