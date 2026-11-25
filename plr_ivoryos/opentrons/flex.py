@@ -35,7 +35,7 @@ from pylabrobot.resources import TipRack
 from plr_ivoryos import bridge, worktable
 from plr_ivoryos.async_bridge import run_async
 from plr_ivoryos.opentrons.simulator import FLEX_PIPETTES, SimulatedFlexServer
-from plr_ivoryos.robot import Part, WorktableRobot
+from plr_ivoryos.robot import Part, WorktableRobot, choice, toggle
 from plr_ivoryos.wells import Labware, Site
 
 MOUNTS = ("left", "right")
@@ -317,10 +317,15 @@ class Flex(WorktableRobot):
         return {"equipment": {**equipment, "labels": {part: FLEX_PIPETTES[name]["label"]
                                                       for part, name in equipment.items() if name in FLEX_PIPETTES}}}
 
-    def _catalog_extras(self) -> dict:
-        return {"equipment": {"pipettes": [{"name": name, "label": spec["label"], "channels": spec["channels"]}
-                                           for name, spec in FLEX_PIPETTES.items()],
-                              "trash": list(MOVABLE_TRASH), "current": self.equipment}}
+    def _equipment_fields(self) -> List[dict]:
+        now = self.equipment
+        mounts = [(name, spec["label"]) for name, spec in FLEX_PIPETTES.items() if spec["channels"] != 96]
+        heads = [(name, spec["label"]) for name, spec in FLEX_PIPETTES.items() if spec["channels"] == 96]
+        return [choice("left", "Left", now.get("left"), mounts, none="nothing"),
+                choice("right", "Right", now.get("right"), mounts, none="nothing"),
+                choice("head96", "96-channel", now.get("head96"), heads, none="nothing"),
+                toggle("gripper", "Gripper", now.get("gripper")),
+                choice("trash", "Trash bin", now.get("trash"), [(slot, slot) for slot in MOVABLE_TRASH], none="none")]
 
     def _edit_equipment(self, change: dict) -> str:
         """What is mounted: left, right, head96 (a pipette name, or none), gripper (true or false),

@@ -15,16 +15,21 @@ with its PyLabRobot class's own steps, names and arguments
 
 Which frame it is (STARlet, STAR, STARplus) is the worktable file's `deck_type`, and what is fitted
 is its `equipment`, because IvoryOS reads a deck's instruments once, when it starts, and PyLabRobot
-only learns what is fitted once it connects. Simulated, what is fitted is what PyLabRobot's
-recording of that frame has (8 channels, a 96-head, an iSWAP, CoRe grippers, an autoload; say
-`"head384": true` for the 384-head recording). A real STAR is asked once, when the file does not
-say, and the answer is written to the file; each time it is set up, what it reports is checked
-against the file.
+only learns what is fitted once it connects. A STAR's channels and heads are built into it, so a
+real STAR is asked once, when the file does not say, and the answer is written to the file; each
+time it is set up, what it reports is checked against the file. Simulated, the STAR is PyLabRobot's
+recording of that frame (8 channels, a 96-head, an iSWAP, CoRe grippers, an autoload), changed to
+have what the file says: how many channels (CHANNELS), a 96-head, a 384-head or none, an iSWAP or
+not, an autoload or not (`simulated_configuration`), so a dry run matches the STAR it stands in for.
 
 `simulated=True` is PyLabRobot's own STAR simulator (`STARSimulationDriver`): every command is
 checked and answered as the firmware would, with PyLabRobot's tip and volume tracking.
 """
 
+import hashlib
+import json
+import os
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from pylabrobot.hamilton.star.device import (RECORDING_STAR, RECORDING_STAR_HEAD384, RECORDING_STARLET,
@@ -41,7 +46,7 @@ from pylabrobot.hamilton.star.driver.simulator import STARSimulationDriver
 
 from plr_ivoryos import bridge, worktable
 from plr_ivoryos.async_bridge import run_async
-from plr_ivoryos.robot import WorktableRobot, part_class
+from plr_ivoryos.robot import WorktableRobot, choice, part_class, toggle
 from plr_ivoryos.wells import Labware, Site
 
 # deck_type -> (PyLabRobot's frame, its recording, its recording with a 384-head)
@@ -54,23 +59,100 @@ FRAMES = {
 # What can be fitted to a STAR, by PyLabRobot's attribute for it.
 PARTS = ("pipettes", "head96", "head384", "iswap", "core_grippers", "autoload")
 
+# How many channels a simulated STAR can have, by frame: what the frames are built with.
+# PyLabRobot's simulator cannot model a single channel.
+CHANNELS = {"STARLetDeck": (2, 4, 8), "STARDeck": (2, 4, 8, 12, 16), "STARPlusDeck": (2, 4, 8, 12, 16)}
+
 
 def check_equipment(equipment: Dict[str, Any]) -> Dict[str, Any]:
-    """`equipment` as the worktable file keeps it ({"pipettes": true, "head96": true, ...}), or
-    ValueError saying what is wrong with it."""
+    """`equipment` as the worktable file keeps it ({"channels": 8, "head96": true, ...}), or
+    ValueError saying what is wrong with it. `channels` decides `pipettes` (and the CoRe
+    grippers, which two channels carry) when it is given."""
     if not isinstance(equipment, dict):
-        raise ValueError('equipment is {"pipettes": true, "head96": true, "iswap": true, ...}')
-    unknown = sorted(set(equipment) - set(PARTS))
+        raise ValueError('equipment is {"channels": 8, "head96": true, "iswap": true, ...}')
+    unknown = sorted(set(equipment) - set(PARTS) - {"channels"})
     if unknown:
-        raise ValueError(f"'{unknown[0]}' is not something fitted to a STAR: {', '.join(PARTS)}.")
-    out = {part: bool(equipment.get(part, False)) for part in PARTS}
+        raise ValueError(f"'{unknown[0]}' is not something fitted to a STAR: channels, {', '.join(PARTS)}.")
+    out = {part: _yes(equipment.get(part, False)) for part in PARTS}
+    if equipment.get("channels") is not None:
+        try:
+            number = float(equipment["channels"])
+        except (TypeError, ValueError):
+            raise ValueError(f"channels is a number of channels, not '{equipment['channels']}'.") from None
+        if number != int(number) or not 0 <= number <= 16:
+            raise ValueError(f"A STAR has 0 to 16 channels, not {equipment['channels']}.")
+        channels = int(number)
+        out.update(channels=channels, pipettes=channels > 0, core_grippers=channels >= 2)
     if out["head96"] and out["head384"]:
         raise ValueError("A STAR has a 96-head or a 384-head, not both.")
     return out
 
 
+def _yes(value: Any) -> bool:
+    return value.strip().lower() in ("true", "yes", "on", "1") if isinstance(value, str) else bool(value)
+
+
 def _fitted(device) -> Dict[str, Any]:
-    return {part: getattr(device, part, None) is not None for part in PARTS}
+    fitted = {part: getattr(device, part, None) is not None for part in PARTS}
+    fitted["channels"] = device.pipettes.num_channels if fitted["pipettes"] else 0
+    return fitted
+
+
+def _recording(kind: str, head384: bool = False) -> dict:
+    frame, recording, recording384 = FRAMES[kind]
+    if head384 and recording384 is None:
+        raise ValueError(f"PyLabRobot has no recording of a {worktable.DECKS.get(kind, kind)} with a 384-head "
+                         "to simulate.")
+    with open(recording384 if head384 else recording) as f:
+        return json.load(f)
+
+
+def recorded_equipment(kind: str, head384: bool = False) -> Dict[str, Any]:
+    """What PyLabRobot's recording of a frame has fitted."""
+    device = _recording(kind, head384)["device"]
+    arm = device.get("left_arm") or {}
+    return check_equipment({"channels": device.get("num_pip_channels", 0), "head96": arm.get("head96_installed"),
+                            "head384": arm.get("head384_installed"), "iswap": arm.get("iswap_installed"),
+                            "autoload": device.get("autoload_installed")})
+
+
+def simulated_configuration(kind: str, equipment: Dict[str, Any]) -> str:
+    """PyLabRobot's recording of the frame, changed to have what `equipment` says is fitted: the
+    path of a configuration for PyLabRobot's simulator (`declared_configuration_json`). The 384-head
+    one is PyLabRobot's own recording; channels, a head, the iSWAP and the autoload are taken away
+    or the channels counted again, the way PyLabRobot derived its other recordings from one."""
+    recorded = _recording(kind, bool(equipment.get("head384")))
+    device, arm = recorded["device"], recorded["device"]["left_arm"]
+    held = recorded["arms"]["left"]
+    channels = int(equipment.get("channels", device["num_pip_channels"]))
+    if channels < 2:
+        raise ValueError("PyLabRobot's STAR simulator needs at least two channels.")
+    device["num_pip_channels"] = channels
+    recorded_channels = held["pipettes"]["channels"]
+    held["pipettes"]["channels"] = [dict(recorded_channels[i % len(recorded_channels)]) for i in range(channels)]
+    if not equipment.get("head96") and not equipment.get("head384"):
+        for head in ("head96", "head384"):
+            held.pop(head, None)
+            arm[f"{head}_installed"] = device[f"{head}_installed"] = False
+    if not equipment.get("iswap"):
+        held.pop("iswap", None)
+        arm["iswap_installed"] = device["kb_iswap_installed"] = False
+    elif "iswap" not in held:
+        raise ValueError(f"PyLabRobot's recording of a {worktable.DECKS.get(kind, kind)} has no iSWAP to simulate.")
+    if not equipment.get("autoload"):
+        recorded.pop("autoload", None)
+        device["autoload_installed"] = False
+    elif not recorded.get("autoload"):
+        raise ValueError(f"PyLabRobot's recording of a {worktable.DECKS.get(kind, kind)} has no autoload to simulate.")
+    text = json.dumps(recorded, sort_keys=True)
+    folder = os.path.join(tempfile.gettempdir(), "plr-ivoryos-star")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, hashlib.sha256(text.encode()).hexdigest()[:16] + ".json")
+    if not os.path.exists(path):
+        with open(path + ".part", "w") as f:
+            f.write(text)
+        os.replace(path + ".part", path)
+    return path
 
 
 class STAR(WorktableRobot):
@@ -78,13 +160,13 @@ class STAR(WorktableRobot):
     names and wells; each fitted thing (channels, 96- or 384-head, iSWAP, CoRe grippers, autoload) is
     an instrument of its own (`__ivoryos_instruments__`).
 
-    simulated      PyLabRobot's STAR simulator, with the fitted things its recording of the frame has
+    simulated      PyLabRobot's STAR simulator, with what the file says is fitted (simulated_configuration)
     worktable      the worktable file (worktable.py); optional, worktable.json in the deck's data
                    folder. A new one starts ready-made (simulated) or empty, and is written on the
                    first change.
     deck_type      STARLetDeck, STARDeck or STARPlusDeck, for a new worktable file (default STARlet)
-    equipment      what is fitted, when the file does not say ({"head384": true} chooses the 384-head
-                   recording when simulated)
+    equipment      what is fitted, when the file does not say: {"channels": 4, "head96": false}; what it
+                   leaves out is what the frame's recording has ({"head384": true}: the 384-head one)
     device_address / serial_number   which STAR on USB, when there is more than one
     step_delay_s   a pause after each step, simulated only, so a run can be watched
     tracking       PyLabRobot's tip and volume tracking
@@ -103,9 +185,17 @@ class STAR(WorktableRobot):
         found = None if self._new_file else self._config.get("equipment")
         wanted = check_equipment(found or equipment or {}) if (found or equipment) else None
         if simulated:
-            # What the recording has; the file (or `equipment`) only chooses the 384-head one.
-            self._head384 = bool(wanted and wanted["head384"])
+            # What the file (or `equipment`) says, the rest as the frame's recording has it; then
+            # what the simulated STAR made from that reports.
+            asked = found or equipment or {}
+            self._config["equipment"] = self._simulated_equipment(asked, fit=True)
             self._config["equipment"] = self._ask(self._make_plr(self._fresh_deck()))
+            left_out = sorted(part for part, on in check_equipment(asked).items()
+                              if part in asked and on and not self._config["equipment"].get(part))
+            if left_out or ("channels" in asked and int(asked["channels"]) != self.equipment["channels"]):
+                print(f"plr-ivoryos: a simulated {self._label()} cannot have all that its equipment says "
+                      f"({', '.join(left_out) or 'those channels'}); it has what PyLabRobot's recording of one has "
+                      "instead.")
         elif wanted:
             self._config["equipment"] = wanted
         else:
@@ -121,16 +211,53 @@ class STAR(WorktableRobot):
     def equipment(self) -> Dict[str, Any]:
         return dict(self._config.get("equipment") or {})
 
+    def _kind(self) -> str:
+        return self._config.get("deck_type") or self.KINDS[0]
+
     def _fresh_deck(self):
-        return worktable.make_deck(self._config.get("deck_type") or self.KINDS[0])
+        return worktable.make_deck(self._kind())
+
+    def _simulated_equipment(self, given: Dict[str, Any], fit: bool = False) -> Dict[str, Any]:
+        """What a simulated STAR of this frame has: what `given` says, the rest as the frame's
+        recording has it. `fit`: what this frame cannot have (16 channels on a STARlet, after
+        switching frames) becomes what its recording has, instead of refused."""
+        kind, given = self._kind(), dict(given or {})
+        has384 = FRAMES[kind][2] is not None
+        if given.get("head384") and not has384:
+            if not fit:
+                _recording(kind, True)  # says why
+            given.update(head384=False, head96=True)
+        recorded = recorded_equipment(kind, bool(given.get("head384")))
+        if given.get("head384"):
+            given["head96"] = False
+        elif given.get("head96"):
+            given["head384"] = False
+        given.pop("pipettes", None)
+        given.pop("core_grippers", None)  # the channels decide these
+        wanted = {**recorded, **given}
+        if wanted.get("channels") is None:
+            wanted["channels"] = recorded["channels"]
+        out = check_equipment(wanted)
+        problems = []
+        if out["channels"] not in CHANNELS[kind]:
+            problems.append(("channels", f"a simulated {worktable.DECKS.get(kind, kind)} has "
+                                         f"{', '.join(map(str, CHANNELS[kind]))} channels, not {out['channels']}"))
+        for part in ("iswap", "autoload"):
+            if out[part] and not recorded[part]:
+                problems.append((part, f"PyLabRobot's recording of a {worktable.DECKS.get(kind, kind)} has no "
+                                       f"{'iSWAP' if part == 'iswap' else 'autoload'} to simulate"))
+        if problems and not fit:
+            text = "; ".join(why for _, why in problems)
+            raise ValueError(text[0].upper() + text[1:] + ".")
+        if problems:
+            return check_equipment({**out, **{part: recorded[part] for part, _ in problems}})
+        return out
 
     def _make_plr(self, deck):
-        frame, recording, recording384 = FRAMES[self._config.get("deck_type") or self.KINDS[0]]
+        frame = FRAMES[self._kind()][0]
         if self._simulated:
-            if getattr(self, "_head384", False) and recording384 is None:
-                raise ValueError("PyLabRobot has no recording of this frame with a 384-head to simulate.")
-            driver = STARSimulationDriver(deck=deck, declared_configuration_json=recording384 if self._head384
-                                          else recording)
+            driver = STARSimulationDriver(deck=deck, declared_configuration_json=simulated_configuration(
+                self._kind(), self.equipment or recorded_equipment(self._kind())))
         else:
             driver = STARDriver(device_address=self._device_address, serial_number=self._serial_number, deck=deck)
         return frame(deck=deck, driver=driver)
@@ -159,7 +286,10 @@ class STAR(WorktableRobot):
         await self._plr.setup()
         fitted, problems = _fitted(self._plr), []
         for part, wanted in self.equipment.items():
-            if wanted and not fitted[part]:
+            if part == "channels":
+                if wanted != fitted["channels"]:
+                    problems.append(f"it has {fitted['channels']} channels (the file says {wanted})")
+            elif wanted and not fitted[part]:
                 problems.append(f"there is no {part} (the file says there is)")
         if problems:
             await self._plr.stop()
@@ -173,6 +303,8 @@ class STAR(WorktableRobot):
         return self._plr.driver
 
     def _attach_deck(self, deck) -> None:
+        if self._simulated:  # another frame, perhaps: what it cannot have becomes what its recording has
+            self._config["equipment"] = self._simulated_equipment(self._config.get("equipment") or {}, fit=True)
         self._plr = self._make_plr(deck)  # PyLabRobot 1.0 makes the deck a child of the device
 
     def _checked(self, config: dict) -> dict:
@@ -180,6 +312,11 @@ class STAR(WorktableRobot):
         when the deck next starts."""
         config["equipment"] = check_equipment(config.get("equipment") or self.equipment)
         return config
+
+    def _parts_read(self) -> Any:
+        # The instruments a STAR is split into are made from what is fitted; how many channels
+        # the channels instrument drives is read when it runs.
+        return sorted((part, str(on)) for part, on in self.equipment.items() if part != "channels")
 
     def setup(self) -> None:
         """Connect and initialize the STAR, and find what is fitted, checking it against the
@@ -193,7 +330,45 @@ class STAR(WorktableRobot):
             self._ready = False
 
     def _deck_extras(self) -> dict:
-        return {"equipment": {part: True for part, on in self.equipment.items() if on}}
+        return {"equipment": {part: True for part, on in self.equipment.items() if on and part != "channels"}}
+
+    def _equipment_fields(self) -> List[dict]:
+        kind, now = self._kind(), self.equipment
+        channels = sorted(set(CHANNELS[kind]) | ({now["channels"]} if now.get("channels") else set()))
+        heads = [("96", "96-head")] + ([("384", "384-head")] if FRAMES[kind][2] is not None or now.get("head384") else [])
+        head = "384" if now.get("head384") else "96" if now.get("head96") else None
+        fields = [choice("channels", "Channels", now.get("channels"), [(n, n) for n in channels]),
+                  choice("head", "Head", head, heads, none="none"),
+                  toggle("iswap", "iSWAP", now.get("iswap"))]
+        if not self._simulated or recorded_equipment(kind)["autoload"]:
+            fields.append(toggle("autoload", "Autoload", now.get("autoload")))
+        return fields
+
+    def _equipment_fixed(self) -> Optional[str]:
+        if not self._simulated:
+            return "As the STAR reported it: its channels and heads are built into it."
+        return None
+
+    def _edit_equipment(self, change: dict) -> str:
+        """What a simulated STAR has: channels (a number CHANNELS offers), head (96, 384 or none),
+        iswap and autoload (true or false). A real STAR's are built into it, and read from it."""
+        if not self._simulated:
+            raise ValueError(f"{self._equipment_fixed()} Change it in {self._path} only if the STAR itself changed.")
+        now = self.equipment
+        given = {part: now.get(part) for part in ("channels", "head96", "head384", "iswap", "autoload")}
+        if "channels" in change:
+            given["channels"] = change["channels"]
+        if "head" in change:
+            head = str(change["head"])
+            if head not in ("96", "384", "none", ""):
+                raise ValueError(f"A STAR's head is a 96-head, a 384-head or none, not '{head}'.")
+            given.update(head96=head == "96", head384=head == "384")
+        for part in ("iswap", "autoload"):
+            if part in change:
+                given[part] = _yes(change[part])
+        self._config["equipment"] = self._simulated_equipment(given)
+        self._plr = self._make_plr(self.deck)
+        return "equipment"
 
 
 # --- the parts ----------------------------------------------------------------------------------------

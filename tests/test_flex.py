@@ -328,7 +328,17 @@ def test_the_catalogue_is_what_fits_a_flex(flex):
     assert names["flex_96_tiprack_200ul"] == "tip_rack" and "opentrons_96_tiprack_300ul" not in names
     assert names["cor_96_wellplate_360uL_Fb"] == "plate" and "carrier" not in names.values()
     assert catalog["decks"] == [], "a Flex is a Flex"
-    assert {"p1000_multi_flex", "p200_96"} <= {p["name"] for p in catalog["equipment"]["pipettes"]}
+    fields = {f["key"]: f for f in catalog["equipment"]["fields"]}
+    assert list(fields) == ["left", "right", "head96", "gripper", "trash"] and catalog["equipment"]["fixed"] is None
+    assert "p1000_multi_flex" in {o["value"] for o in fields["left"]["options"]}
+    assert "p200_96" in {o["value"] for o in fields["head96"]["options"]}
+    assert "p200_96" not in {o["value"] for o in fields["left"]["options"]}, "a 96-channel head is not on a mount"
+    assert fields["left"]["value"] == "p1000_multi_flex" and fields["gripper"]["value"] is True
+
+
+def test_the_view_says_what_is_mounted(flex):
+    summary = flex.__ivoryos_labware__()["deck"]["equipment_summary"]
+    assert summary[0].startswith("Left: Flex 8-Channel") and "Gripper" in summary
 
 
 def test_equipment_changes_in_the_file_and_after_a_restart(flex, data_folder):

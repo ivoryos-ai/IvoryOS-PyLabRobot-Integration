@@ -14,7 +14,7 @@ is the Prep's eight labware spots, named 0 to 7 (front left first, column by col
 of a Prep has fitted (two channels, an 8-channel head, a heater shaker).
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pylabrobot.hamilton.prep.device import Prep as plr_Prep, PrepDevice
 from pylabrobot.hamilton.prep.driver.features.core_grippers import CoreGrippers
@@ -25,7 +25,7 @@ from pylabrobot.hamilton.prep.driver.features.pipettes import Pipettes
 
 from plr_ivoryos import bridge
 from plr_ivoryos.async_bridge import run_async
-from plr_ivoryos.robot import WorktableRobot, part_class
+from plr_ivoryos.robot import WorktableRobot, part_class, toggle
 from plr_ivoryos.wells import Labware, Site
 
 PARTS = ("pipettes", "head8", "core_grippers", "heater_shaker", "lights")
@@ -146,6 +146,17 @@ class Prep(WorktableRobot):
 
     def _deck_extras(self) -> dict:
         return {"equipment": {part: True for part, on in self.equipment.items() if on}}
+
+    def _equipment_fields(self) -> List[dict]:
+        now = self.equipment
+        return [toggle(part, label, now.get(part)) for part, label in (
+            ("pipettes", "Channels"), ("head8", "8-channel head"), ("core_grippers", "CoRe grippers"),
+            ("heater_shaker", "Heater shaker"), ("lights", "Lights"))]
+
+    def _equipment_fixed(self) -> Optional[str]:
+        if self._simulated:
+            return "As PyLabRobot's recording of a Prep has it."
+        return "As the Prep reported it: what is built into it is not changed here."
 
 
 def worktable_deck():

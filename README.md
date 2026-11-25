@@ -75,11 +75,21 @@ nimbus.move_plate(plate="sample_plate", to="plate_carrier-4")
 ```
 
 What is fitted to each robot is the worktable file's `equipment`, because IvoryOS reads a deck's
-instruments once, when it starts: on a Flex or OT-2 the pipette on each mount; on a STAR or Prep which
-parts it has (`{"pipettes": true, "head96": true, "iswap": true, ...}`). Simulated, it is what the
-simulator has (on a STAR, PyLabRobot's recording of that frame; `{"head384": true}` picks the
-384-head recording). A real robot is asked once when the file does not say, and the answer is
-written to the file; each time it is set up, what it reports is checked against the file.
+instruments once, when it starts: on a Flex or OT-2 the pipette on each mount; on a STAR how many
+channels and which parts it has (`{"channels": 8, "head96": true, "iswap": true, ...}`); on a Prep
+which parts it has. A real robot is asked once when the file does not say, and the answer is written
+to the file; each time it is set up, what it reports is checked against the file.
+
+Simulated, an Opentrons robot has whatever pipettes the file says. A simulated STAR is PyLabRobot's
+recording of that frame (8 channels, a 96-head, an iSWAP, CoRe grippers, an autoload) changed to
+what the file says, so a dry run matches the STAR it stands in for: 2, 4 or 8 channels on a STARlet
+and 2, 4, 8, 12 or 16 on a STAR or STARplus (PyLabRobot's simulator cannot model one), a 96-head, a
+384-head (STAR and STARlet) or none, and the iSWAP and autoload (not on a STARplus, whose recording
+has none) or not. A simulated Prep is PyLabRobot's recording of one, as it is.
+
+A STAR's or a Prep's channels and heads are built into it, so a real one's are shown and not changed;
+an Opentrons pipette is swapped by hand, so a real Flex's or OT-2's are changed in the file (or the
+Labware panel) when the pipette on the robot is.
 
 Each robot module keeps a `SKIPPED` table of the PyLabRobot methods it cannot offer as a step, and
 why: an argument of a type a form cannot fill (a callback, a colour) with no default.
@@ -330,16 +340,21 @@ in a deck file (or `ivoryos_edge.run(__name__, plugins=[plr_ivoryos.labware_view
 beside every page. **Edit layout** changes the worktable file as you go, with nothing to confirm.
 It shows the layout and the labware to place; the rest is under **⋯**, and **?** explains it all:
 
-- on a Flex, what is mounted (**⋯ → Pipettes and gripper…**): the pipette on each mount or the
-  96-channel head, the gripper, the trash slot; on a robot with several worktables (a STAR,
-  STARlet or STARplus, an EVO 100, 150 or 200), which one (**⋯ → Robot…**);
+- what is fitted, named in the panel's header: click it (or **⋯ → Equipment…**). A Flex: the
+  pipette on each mount or the 96-channel head, the gripper, the trash slot. An OT-2: the pipette on
+  each mount. A simulated STAR: its channels, head, iSWAP and autoload. A real STAR, and a Prep, show
+  theirs. On a robot with several worktables (a STAR, STARlet or STARplus, an EVO 100, 150 or 200),
+  which one is there too;
 - drag labware from PyLabRobot's catalogue (the robot's own tip racks and carriers, and any plate,
-  reservoir or tube rack) onto an empty slot or carrier position; drag what is there to move it,
-  × to take it off, rename it in the list;
+  reservoir or tube rack) onto an empty slot or carrier position; drag what is there, by any part
+  of it, to move it, × to take it off, rename it in the list;
 - click a plate or reservoir, pick wells, and **Fill** them with a liquid and a volume: the
   `liquids` a run starts from;
 - **⋯ → Import a layout…** takes a worktable file you already have; the one it replaces is kept as
   `worktable.before-import.json`.
+
+Outside **Edit layout**, click any labware to look closer: then each well or tip says what it holds
+as the pointer passes over it (**Whole worktable**, or Escape, goes back).
 
 Steps offer added, removed or renamed labware, and changed equipment, once the deck restarts (the
 panel offers the restart). Moving labware, filling wells, and going back to the worktable the deck
@@ -418,6 +433,15 @@ IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
   opened it. Every step runs on one event loop on a background thread for the life of the process,
   so steps are ordinary synchronous calls, from IvoryOS or plain Python. The robot connects at the
   first step, so a deck starts with the robot switched off.
+
+### Not released yet
+
+- **What is fitted, from the Labware panel, on every robot**: click it in the panel's header. An
+  OT-2's mounts can be changed now (before, only a Flex's); a simulated STAR has the channels (2 to
+  16), head, iSWAP and autoload its file says, instead of always PyLabRobot's recording; a real STAR
+  and a Prep show theirs.
+- In the panel, labware is dragged by any part of it, wells and tips included, and clicked anywhere
+  to look closer; then each well or tip says what it holds as the pointer passes over it.
 
 ### What changed in 1.0.0b3 (still on PyLabRobot 1.0.0b1)
 

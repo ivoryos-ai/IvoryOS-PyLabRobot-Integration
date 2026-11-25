@@ -105,6 +105,34 @@ def _a(word: str) -> str:
     return "an" if word[:1].upper() in "AEIOU" else "a"
 
 
+def choice(key: str, label: str, value: Any, options, none: Optional[str] = None) -> dict:
+    """A thing fitted to a robot that is one of several (a pipette on a mount), for
+    `_equipment_fields`. `options` are (value, label) pairs; `none` adds "nothing fitted"."""
+    offered = ([{"value": "none", "label": none}] if none else []) + [{"value": str(v), "label": str(text)}
+                                                                      for v, text in options]
+    return {"key": key, "label": label, "kind": "choice", "options": offered,
+            "value": "none" if value in (None, "", "none") else str(value)}
+
+
+def toggle(key: str, label: str, value: Any) -> dict:
+    """A thing fitted to a robot or not (a gripper), for `_equipment_fields`."""
+    return {"key": key, "label": label, "kind": "toggle", "value": bool(value)}
+
+
+def equipment_summary(fields: List[dict]) -> List[str]:
+    """What is fitted in a few words each, for the Labware view's header: "Left: Flex 8-Channel
+    1000 µL", "Gripper"."""
+    out = []
+    for field in fields:
+        if field["kind"] == "toggle":
+            if field["value"]:
+                out.append(field["label"])
+        elif field["value"] != "none":
+            shown = next((o["label"] for o in field["options"] if o["value"] == field["value"]), field["value"])
+            out.append(f"{field['label']}: {shown}")
+    return out
+
+
 def mounted_tips(head) -> List[bool]:
     """Which channels of a PyLabRobot head or pipette hold a tip, whatever the robot calls it:
     `get_mounted_tips()` (Flex, Prep), `get_mounted_tip(channel)` (STAR channels), the 96-head's
@@ -362,6 +390,7 @@ class WorktableRobot:
                                               if os.path.exists(f)},
                          "pylabrobot_error": self._pylabrobot_error,
                          "layout": self._layout_status(), "restart_needed": self._restart_needed(),
+                         "equipment_summary": equipment_summary(self._equipment_fields()),
                          **self._deck_extras()},
                 "labware": labware,
                 "sites": [{"name": holder.name, "label": label, **_box(holder),
@@ -375,6 +404,18 @@ class WorktableRobot:
     def _deck_extras(self) -> dict:
         """More about the robot for the Labware view (a subclass's equipment)."""
         return {}
+
+    def _equipment_fields(self) -> List[dict]:
+        """What is fitted, as the Labware view shows it and changes it: one entry per thing,
+        {"key", "label", "kind": "choice" or "toggle", "value", "options": [{"value", "label"}] for
+        a choice}. A change comes back as the "equipment" edit with {key: value}. None for a robot
+        with nothing fitted to show."""
+        return []
+
+    def _equipment_fixed(self) -> Optional[str]:
+        """Why what is fitted is shown but not changed here (a real STAR's channels are built into
+        it), or None when it can be changed."""
+        return None
 
     def _describe(self, resource, site_of: Dict[int, str], listed: Dict[str, dict]) -> dict:
         box = _box(resource)
@@ -622,7 +663,8 @@ class WorktableRobot:
         }
 
     def _catalog_extras(self) -> dict:
-        return {}
+        fields = self._equipment_fields()
+        return {"equipment": {"fields": fields, "fixed": self._equipment_fixed()}} if fields else {}
 
     def __ivoryos_labware_edit__(self, action: str, **change) -> dict:
         """Change the worktable, the way a person changes the real one; nothing moves.
