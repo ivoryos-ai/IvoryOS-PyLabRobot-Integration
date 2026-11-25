@@ -70,9 +70,19 @@ Odyssey has a simulator** (`OdysseyChatterbox`). Only three take their transport
 (`OdysseyClassic(io=...)` and the Micronic `SaneScanner` and `TwainScanner`); the rest open their
 own serial port or socket, so there is no seam a simulator could use without patching.
 
-This package does not wrap them yet (0.2 did, through PyLabRobot's older front ends, which 1.0 keeps
-only in `pylabrobot.legacy`). Wrapping a 1.0 machine is cheap with `bridge.py`: one class, its
-methods as steps, no worktable. Simulating dozens of protocols ourselves is not maintainable. The upstream
-fix is one pattern for all of them: each machine takes its `io` (or a driver) as an argument, as the
-Flex, OT-2 and Odyssey do, so a chatterbox or a recorded-traffic replay (`pylabrobot.io` already has
-capture and validation) can stand in for the device.
+Since 1.0.0b3 this package wraps the ones the 0.2 line had (README, *Devices*): the Mettler Toledo
+balance, Masterflex pump, VSpin, BioShake, Inheco ThermoShake, Cytation 5, Synergy H1, SpectraMax M5
+and 384 Plus, and the Byonoy A96 and L96 through their 1.0 classes, and the rest through
+`pylabrobot.legacy`. How each is simulated, and what that checks:
+
+| Device | Simulator | What it checks |
+| :--- | :--- | :--- |
+| a PyLabRobot 1.0 device class (the eleven above) | ours, `plr_ivoryos/simulators.py`: one per kind of device, standing in for the class at its methods | the step's arguments against PyLabRobot's signature, and the state the main operations change (a tare, a door that must be closed to spin, a target temperature); a reader's readings follow the liquids in each well. **None of PyLabRobot's driver code runs**: not the protocol, not its own checks. Weaker than the Flex's. |
+| a legacy front end (scale, pump, centrifuge, heater-shaker, thermocycler, fan) | PyLabRobot's legacy chatterbox for it | PyLabRobot's legacy front end runs as written (a shake for a duration, `wait_for_temperature`, `run_pcr_profile` building its protocol); nothing device-specific |
+| a legacy plate reader backend (CLARIOstar, Spark, Infinite, Gemini EM) | ours, as for a 1.0 reader | as for a 1.0 reader |
+
+Simulating each protocol ourselves (as the Flex's robot-server does) is not maintainable for dozens
+of devices, so the 1.0 classes are stood in for at the method level. The upstream fix is still one
+pattern for all of them: each machine takes its `io` (or a driver) as an argument, as the Flex, OT-2
+and Odyssey do, so a chatterbox or a recorded-traffic replay (`pylabrobot.io` already has capture
+and validation) can stand in for the device, and its own code runs in simulation.
