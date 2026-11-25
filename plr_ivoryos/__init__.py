@@ -17,6 +17,19 @@ PyLabRobot's legacy LiquidHandler (pylabrobot.legacy), one instrument with every
                             simulated: PyLabRobot's LiquidHandlerChatterboxBackend
 What is fitted, and what sits where on the deck, is the worktable file (worktable.py).
 
+Devices (device.py), each one instrument with PyLabRobot's own steps
+--------------------------------------------------------------------
+PyLabRobot 1.0 classes, simulated by this package (simulators.py):
+    plr_ivoryos.mettler_toledo.MettlerToledoWXS205SDU, cole_parmer.Masterflex, agilent.VSpin,
+    qinstruments.BioShake, inheco.InhecoThermoShake, agilent.Cytation5, agilent.SynergyH1,
+    molecular_devices.SpectraMaxM5, molecular_devices.SpectraMax384Plus,
+    byonoy.ByonoyAbsorbance96, byonoy.ByonoyLuminescence96
+PyLabRobot's legacy front ends and backends, simulated by PyLabRobot's legacy simulators:
+    plr_ivoryos.legacy.CLARIOstar, TecanSpark, TecanInfinite200Pro, SpectraMaxGeminiEM,
+    HamiltonHeaterShaker, HamiltonHepaFan, InhecoODTC, OpentronsThermocycler, ProFlex, ATC, and
+    Scale, Pump, Centrifuge, HeaterShaker, Thermocycler, Fan, PlateReader with any legacy backend
+A plate reader reads a plate where it sits on a liquid handler's worktable (device.Reader).
+
 How a PyLabRobot method becomes a step (wells as `plate[A1:H1]` text, labware by name) is
 bridge.py; the worktable, the Labware view's hooks and running a step are robot.py, and the Labware
 view itself is labware_view (an IvoryOS NextGen plugin).
@@ -50,4 +63,4 @@ __all__ = [
     "shutdown_async",
 ]
 
-__version__ = "1.0.0b2"
+__version__ = "1.0.0b3"

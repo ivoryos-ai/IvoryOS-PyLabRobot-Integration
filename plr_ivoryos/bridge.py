@@ -30,6 +30,7 @@ import dataclasses
 import enum
 import inspect
 import json
+import math
 import types
 import typing
 from typing import Annotated, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -121,12 +122,45 @@ def _number_list(cast):
     return convert
 
 
+def _number_tuple(cast, length: int):
+    numbers = _number_list(cast)
+
+    def convert(value, resolver):
+        values = numbers(value, resolver)
+        if values is None:
+            return None
+        if len(values) != length:
+            raise ValueError(f"expected {length} {cast.__name__} values, e.g. {', '.join(['0'] * length)}")
+        return tuple(values)
+    return convert
+
+
 def _json_value(value, resolver):
     if isinstance(value, str) and value.strip()[:1] in "{[":
         try:
             return json.loads(value)
         except ValueError:
             raise ValueError(f"'{value}' is not valid JSON") from None
+    return value
+
+
+def _build(hint: Any, value: Any) -> Any:
+    """`value` (parsed JSON) as `hint` where `hint` is a dataclass, or a list or optional of one,
+    so a thermocycler Protocol's stages and their steps arrive as PyLabRobot's Stage and Step."""
+    arms = [a for a in _arms(hint) if a is not NoneType]
+    if value is None or len(arms) != 1:
+        return value
+    hint = arms[0]
+    inner = _sequence_of(hint)
+    if inner is not None and isinstance(value, (list, tuple)):
+        return [_build(inner, v) for v in value]
+    if dataclasses.is_dataclass(hint) and inspect.isclass(hint) and isinstance(value, dict):
+        try:
+            hints = typing.get_type_hints(hint)
+        except Exception:
+            hints = {}
+        names = {f.name for f in dataclasses.fields(hint)}
+        return hint(**{k: _build(hints.get(k, Any), v) for k, v in value.items() if k in names and v not in (None, "")})
     return value
 
 
@@ -137,8 +171,10 @@ def _dataclass_value(cls):
         if isinstance(value, str) and value.strip():
             value = _json_value(value, resolver)
         if isinstance(value, dict):
-            names = {f.name for f in dataclasses.fields(cls)}
-            return cls(**{k: v for k, v in value.items() if k in names and v not in (None, "")})
+            try:
+                return _build(cls, value)
+            except TypeError as e:
+                raise ValueError(f"{cls.__name__}: {e}") from None
         if value in ("", {}):
             return None
         raise ValueError(f"expected {cls.__name__} fields, e.g. {{\"x\": 0, \"y\": 0, \"z\": 1}}")
@@ -242,6 +278,11 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
         if inner in (int, float):
             annotation = Optional[List[inner]] if optional else List[inner]
             return Param(param.name, param.kind, default, annotation, _number_list(inner))
+        fixed = typing.get_args(arm) if typing.get_origin(arm) is tuple else ()
+        if fixed and Ellipsis not in fixed and len(set(fixed)) == 1 and fixed[0] in (int, float):
+            # Tuple[int, int, int] (an RGB colour): a list of that many numbers, handed over as a tuple.
+            annotation = Optional[List[fixed[0]]] if optional else List[fixed[0]]
+            return Param(param.name, param.kind, default, annotation, _number_tuple(fixed[0], len(fixed)))
         if dataclasses.is_dataclass(arm) and inspect.isclass(arm):
             # A default such as Coordinate(0, 0, 0) is shown as its fields, which IvoryOS can keep
             # (it stores defaults as JSON); the fields are made a Coordinate again when given.
@@ -266,7 +307,11 @@ def translate_param(param: inspect.Parameter, hint: Any, marker: Any = None) -> 
 
 
 def jsonable(value: Any) -> Any:
-    """What a PyLabRobot method returned, as data IvoryOS can keep."""
+    """What a PyLabRobot method returned, as data IvoryOS can keep. A number that is not one (NaN,
+    which PyLabRobot's legacy readers give for a temperature they did not read) is None: JSON has
+    no NaN, and IvoryOS keeps results as JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, enum.Enum):

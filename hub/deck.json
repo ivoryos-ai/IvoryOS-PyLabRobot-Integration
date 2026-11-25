@@ -1,8 +1,8 @@
 {
   "format": "ivoryos-deck/1",
-  "name": "plr-ivoryos: every liquid handler, simulated",
+  "name": "plr-ivoryos: every liquid handler and device, simulated",
   "packages": [
-    "plr-ivoryos==1.0.0b2"
+    "plr-ivoryos==1.0.0b3"
   ],
   "instruments": [
     {
@@ -117,6 +117,242 @@
         "equipment": {
           "head384": true
         }
+      }
+    },
+    {
+      "name": "mettler_scale",
+      "import": "plr_ivoryos.mettler_toledo",
+      "class": "MettlerToledoWXS205SDU",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "masterflex",
+      "import": "plr_ivoryos.cole_parmer",
+      "class": "Masterflex",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "vspin",
+      "import": "plr_ivoryos.agilent",
+      "class": "VSpin",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "cytation5",
+      "import": "plr_ivoryos.agilent",
+      "class": "Cytation5",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "synergy_h1",
+      "import": "plr_ivoryos.agilent",
+      "class": "SynergyH1",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "spectramax_m5",
+      "import": "plr_ivoryos.molecular_devices",
+      "class": "SpectraMaxM5",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "spectramax_384",
+      "import": "plr_ivoryos.molecular_devices",
+      "class": "SpectraMax384Plus",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "byonoy_a96",
+      "import": "plr_ivoryos.byonoy",
+      "class": "ByonoyAbsorbance96",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "byonoy_l96",
+      "import": "plr_ivoryos.byonoy",
+      "class": "ByonoyLuminescence96",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "bioshake",
+      "import": "plr_ivoryos.qinstruments",
+      "class": "BioShake",
+      "args": {
+        "simulated": true,
+        "model": "BioShakeQ1"
+      }
+    },
+    {
+      "name": "thermoshake",
+      "import": "plr_ivoryos.inheco",
+      "class": "InhecoThermoShake",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "clariostar",
+      "import": "plr_ivoryos.legacy",
+      "class": "CLARIOstar",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "tecan_spark",
+      "import": "plr_ivoryos.legacy",
+      "class": "TecanSpark",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "tecan_infinite",
+      "import": "plr_ivoryos.legacy",
+      "class": "TecanInfinite200Pro",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "gemini_em",
+      "import": "plr_ivoryos.legacy",
+      "class": "SpectraMaxGeminiEM",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "hamilton_hs",
+      "import": "plr_ivoryos.legacy",
+      "class": "HamiltonHeaterShaker",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "hepa_fan",
+      "import": "plr_ivoryos.legacy",
+      "class": "HamiltonHepaFan",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "odtc",
+      "import": "plr_ivoryos.legacy",
+      "class": "InhecoODTC",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "opentrons_tc",
+      "import": "plr_ivoryos.legacy",
+      "class": "OpentronsThermocycler",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "proflex",
+      "import": "plr_ivoryos.legacy",
+      "class": "ProFlex",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "atc",
+      "import": "plr_ivoryos.legacy",
+      "class": "ATC",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "scale",
+      "import": "plr_ivoryos.legacy",
+      "class": "Scale",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "pump",
+      "import": "plr_ivoryos.legacy",
+      "class": "Pump",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "centrifuge",
+      "import": "plr_ivoryos.legacy",
+      "class": "Centrifuge",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "heater_shaker",
+      "import": "plr_ivoryos.legacy",
+      "class": "HeaterShaker",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "plate_reader",
+      "import": "plr_ivoryos.legacy",
+      "class": "PlateReader",
+      "args": {
+        "simulated": true,
+        "worktable": "flex.json"
+      }
+    },
+    {
+      "name": "fan",
+      "import": "plr_ivoryos.legacy",
+      "class": "Fan",
+      "args": {
+        "simulated": true
+      }
+    },
+    {
+      "name": "thermocycler",
+      "import": "plr_ivoryos.legacy",
+      "class": "Thermocycler",
+      "args": {
+        "simulated": true
       }
     }
   ],

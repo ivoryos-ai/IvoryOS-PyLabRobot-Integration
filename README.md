@@ -17,13 +17,15 @@ runs. The worktable, and what is mounted on the robot, is a file rather than cod
 NextGen the Labware panel shows it live and lets you build it by dragging.
 
 > [!IMPORTANT]
-> `plr-ivoryos` 1.0.0b2 is pinned to **PyLabRobot 1.0.0b1**, a beta, and to nothing older: one
+> `plr-ivoryos` 1.0.0b3 is pinned to **PyLabRobot 1.0.0b1**, a beta, and to nothing older: one
 > PyLabRobot in the environment, so no dependency conflict with 0.x. A beta can rename what this
 > package calls, so each beta here is pinned to exactly one of PyLabRobot's.
 >
 > **Every liquid handler PyLabRobot 1.0.0b1 drives works here**, with PyLabRobot's own 1.0 class
 > where it has one (Flex, OT-2, STAR family, Prep) and its `pylabrobot.legacy` front end where it
-> does not yet (Nimbus, Vantage, Tecan EVO). **None has been run on hardware through this package
+> does not yet (Nimbus, Vantage, Tecan EVO), and so do **plate readers, thermocyclers,
+> heater-shakers, centrifuges, balances, pumps and fans** ([Devices](#devices)), in the same
+> environment as the liquid handler. **None has been run on hardware through this package
 > yet**, only in simulation (below). PyLabRobot 1.0.0b1 itself warns that 20 `FlexHead96` operations
 > and `FlexHead1.aspirate` and `.dispense` have "not been tested on hardware".
 
@@ -81,6 +83,92 @@ written to the file; each time it is set up, what it reports is checked against 
 
 Each robot module keeps a `SKIPPED` table of the PyLabRobot methods it cannot offer as a step, and
 why: an argument of a type a form cannot fill (a callback, a colour) with no default.
+
+
+## Devices
+
+Since 1.0.0b3, the devices beside a liquid handler, each one IvoryOS instrument whose steps are
+PyLabRobot's own methods, in the same Python environment as the robot (one PyLabRobot, so no
+dependency conflict between a Flex and the reader next to it). Where PyLabRobot 1.0.0b1 has a class
+of the device's own, that class; where it drives the device only through `pylabrobot.legacy`, the
+legacy front end (or, for a plate reader, the legacy backend: see below).
+
+| Device | `plr_ivoryos` | PyLabRobot 1.0.0b1 | Extra | `simulated=True` runs |
+| :--- | :--- | :--- | :--- | :--- |
+| Mettler Toledo balance (MT-SICS) | `mettler_toledo.MettlerToledoWXS205SDU` | `mettler_toledo.MTSICSDriver` | serial | this package's scale |
+| Cole-Parmer Masterflex pump | `cole_parmer.Masterflex` | `cole_parmer.Masterflex` | serial | this package's pump |
+| Agilent VSpin centrifuge | `agilent.VSpin` | `agilent.vspin.VSpin` | ftdi | this package's centrifuge |
+| QInstruments BioShake (Q1, 3000, 3000 elm, 3000 elm DWP) | `qinstruments.BioShake` | `qinstruments.BioShake` | serial | this package's heater-shaker |
+| Inheco ThermoShake (classic, AC, RM) | `inheco.InhecoThermoShake` | `inheco.InhecoThermoShake` | hid | this package's heater-shaker |
+| Agilent BioTek Cytation 5 (as a reader) | `agilent.Cytation5` | `agilent.biotek.cytation.Cytation5` | ftdi | this package's plate reader |
+| Agilent BioTek Synergy H1 | `agilent.SynergyH1` | `agilent.biotek.synergy.SynergyH1` | ftdi | this package's plate reader |
+| SpectraMax M5, 384 Plus | `molecular_devices.SpectraMaxM5`, `.SpectraMax384Plus` | `molecular_devices.spectramax` | serial | this package's plate reader |
+| Byonoy Absorbance 96, Luminescence 96 | `byonoy.ByonoyAbsorbance96`, `.ByonoyLuminescence96` | `byonoy` | hid | this package's plate reader |
+| BMG CLARIOstar | `legacy.CLARIOstar` | legacy `CLARIOstarBackend` | ftdi | this package's plate reader |
+| Tecan Spark, Infinite 200 PRO | `legacy.TecanSpark`, `.TecanInfinite200Pro` | legacy `ExperimentalSparkBackend`, `ExperimentalTecanInfinite200ProBackend` | usb | this package's plate reader |
+| SpectraMax Gemini EM | `legacy.SpectraMaxGeminiEM` | legacy `MolecularDevicesSpectraMaxGeminiEMBackend` | serial | this package's plate reader |
+| Hamilton Heater Shaker | `legacy.HamiltonHeaterShaker` | legacy `HeaterShaker` + `HamiltonHeaterShakerBackend` | usb | PyLabRobot's legacy chatterbox |
+| Hamilton HEPA fan | `legacy.HamiltonHepaFan` | legacy `Fan` + `HamiltonHepaFanBackend` | ftdi | PyLabRobot's legacy chatterbox |
+| Inheco ODTC | `legacy.InhecoODTC` | legacy `Thermocycler` + `ExperimentalODTCBackend` | | PyLabRobot's legacy chatterbox |
+| Opentrons Thermocycler | `legacy.OpentronsThermocycler` | legacy `Thermocycler` + `OpentronsThermocyclerBackend` (or its USB one) | opentrons | PyLabRobot's legacy chatterbox |
+| Thermo Fisher ProFlex, ATC | `legacy.ProFlex`, `.ATC` | legacy `Thermocycler` + `ProflexBackend`, `ATCBackend` | | PyLabRobot's legacy chatterbox |
+| any legacy scale, pump, centrifuge, heater-shaker, thermocycler, fan, plate reader | `legacy.Scale`, `Pump`, `Centrifuge`, `HeaterShaker`, `Thermocycler`, `Fan`, `PlateReader` (`backend=...`) | that legacy front end | | PyLabRobot's legacy chatterbox (a plate reader: this package's) |
+
+```python
+from plr_ivoryos.opentrons import Flex
+from plr_ivoryos.byonoy import ByonoyAbsorbance96
+from plr_ivoryos.legacy import InhecoODTC
+
+flex = Flex(simulated=True)
+reader = ByonoyAbsorbance96(simulated=True)    # reads the Flex's plates
+odtc = InhecoODTC(ip="192.168.1.40")
+
+flex_right.pick_up_tips(tip_spot="tips[A1]")
+flex_right.aspirate(target="reservoir[A1]", volume=12)
+flex_right.dispense(target="assay_plate[B1]", volume=12)
+flex_right.drop_tips(target="trash")
+reader.read_absorbance(plate="assay_plate", wells="assay_plate[A1:H12]", wavelength=450)
+```
+
+> [!WARNING]
+> **The `ftdi` and `hid` extras are not enough on their own.** They install Python wrappers around
+> a library of the operating system that pip cannot install: libftdi for the BioTek readers, VSpin,
+> CLARIOstar and HEPA fan, hidapi for the Byonoy readers and the Inheco ThermoShake
+> (`brew install libftdi` / `brew install hidapi` on macOS). The IvoryOS desktop app cannot install
+> them either. On Windows, a USB robot also needs a driver set with Zadig. What each device needs,
+> per system, and the error you see without it: [docs/system-libraries.md](docs/system-libraries.md).
+> A simulated device needs none of it.
+
+A BioShake can be one of the four models PyLabRobot 1.0.0b1 can make: `BioShakeQ1` (the default:
+shakes, locks, heats and cools), `BioShake3000` (shakes), `BioShake3000Elm` and
+`BioShake3000ElmDWP` (shake and lock). PyLabRobot names eight more but has no resource definition
+for them yet.
+
+**A plate reader reads a plate where it sits on a liquid handler's worktable.** Its `plate` and
+`wells` are written as for any robot step (`assay_plate`, `assay_plate[A1:H12]`), and IvoryOS offers
+the robot's plates and a well picker for them. Which robot: the one whose worktable file is the
+reader's `worktable` argument (the same file name the robot was given), or without one, the first
+liquid handler in the deck. A reader with no liquid handler beside it holds a plate of its own,
+named `plate`, of `plate_type` (any plate in PyLabRobot's catalogue). PyLabRobot 1.0's reader
+classes take the plate and wells to read; so do its legacy reader backends, which is why a legacy
+reader's steps are its backend's methods (its legacy front end reads only a plate placed inside it).
+A reader returns what its PyLabRobot class returns: a list of results with a plate-shaped `data`
+matrix (None where a well was not read).
+
+**Simulation.** PyLabRobot 1.0.0b1 simulates none of its 1.0 device classes, so `simulated=True` on
+one runs a simulator of this package's (`plr_ivoryos.simulators`) behind the same steps: a balance
+with nothing on it, a centrifuge whose door must be closed to spin, a heater-shaker that reaches its
+temperature at once; a spin or shake takes its duration. A simulated reader's readings follow what
+the liquid handler put in each well: its blank, plus a signal for every microlitre of
+`signal_liquids` (`dye` by default), with a little noise. Anything else a 1.0 class can do (a
+firmware version, a status) is answered with a stand-in of the type it returns. A legacy front end
+runs on PyLabRobot's own legacy simulator, so what the front end adds (`wait_for_temperature`,
+`run_pcr_profile`) runs as PyLabRobot wrote it.
+
+What is not a step: connecting (`setup` and `stop` are the instrument's own), the raw protocol
+(`send_command`), and the resource tree. A thermocycler `Protocol` is typed as JSON
+(`{"stages": [{"repeats": 30, "steps": [{"temperature": [95], "hold_seconds": 15}]}]}`) and handed to
+PyLabRobot as its `Stage`s and `Step`s.
 
 ---
 
@@ -287,14 +375,21 @@ flex = Flex(simulated=True, layouts_folder="/labs/flex-layouts")
 ## Installation
 
 ```bash
-pip install plr-ivoryos==1.0.0b2            # with PyLabRobot 1.0.0b1: Flex, OT-2, Prep, Nimbus over the network
-pip install "plr-ivoryos[serial]==1.0.0b2"  # a Flex over USB
-pip install "plr-ivoryos[usb]==1.0.0b2"     # a STAR, Vantage or EVO over USB
+pip install plr-ivoryos==1.0.0b3            # with PyLabRobot 1.0.0b1: Flex, OT-2, Prep, Nimbus over the network
+pip install "plr-ivoryos[serial]==1.0.0b3"  # a Flex over USB; a balance, pump, BioShake or SpectraMax
+pip install "plr-ivoryos[usb]==1.0.0b3"     # a STAR, Vantage or EVO; a Tecan reader; a Hamilton heater-shaker
+pip install "plr-ivoryos[ftdi]==1.0.0b3"    # a BioTek reader, a CLARIOstar, a VSpin, a Hamilton HEPA fan
+pip install "plr-ivoryos[hid]==1.0.0b3"     # a Byonoy reader, an Inheco ThermoShake
 ```
+
+Extras combine: `plr-ivoryos[usb,hid]==1.0.0b3` for a STAR with a Byonoy reader.
+
+`ftdi` and `hid` also need a system library (libftdi, hidapi), and a USB robot on Windows a driver
+set with Zadig: pip installs none of these. See [docs/system-libraries.md](docs/system-libraries.md).
 
 Name the version: plain `pip install plr-ivoryos` installs 0.2.0, which has no Flex, and `--pre`
 lets every other dependency be a pre-release too. uv takes a pre-release only for a package named
-in the command, so name PyLabRobot as well: `uv pip install plr-ivoryos==1.0.0b2 pylabrobot==1.0.0b1`.
+in the command, so name PyLabRobot as well: `uv pip install plr-ivoryos==1.0.0b3 pylabrobot==1.0.0b1`.
 
 Python 3.10 or newer. A Python environment holds one PyLabRobot, so every deck sharing one (the
 IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
@@ -315,10 +410,30 @@ IvoryOS desktop app's decks do) uses the same plr-ivoryos and PyLabRobot.
   connect, what is fitted, and which PyLabRobot classes its parts are. PyLabRobot 1.0 tracks volumes but
   no longer which liquid, so `liquids.py` compares the worktable before and after each step and
   moves liquids between wells and channels by that.
+- **`device.py`** is the same for a device that is not a liquid handler: one instrument, its
+  PyLabRobot class's methods as steps, set up at the first step; a plate reader (`device.Reader`)
+  reads its `plate` and `wells` against a liquid handler's worktable. **`simulators.py`** simulates
+  the PyLabRobot 1.0 device classes PyLabRobot does not.
 - **Async bridge**: PyLabRobot is built on `asyncio`, and a connection has to stay on the loop that
   opened it. Every step runs on one event loop on a background thread for the life of the process,
   so steps are ordinary synchronous calls, from IvoryOS or plain Python. The robot connects at the
   first step, so a deck starts with the robot switched off.
+
+### What changed in 1.0.0b3 (still on PyLabRobot 1.0.0b1)
+
+- **Devices** ([Devices](#devices)): every device the 0.2 line had, on PyLabRobot 1.0.0b1, so they
+  install beside a 1.0 liquid handler. Eleven through PyLabRobot 1.0 classes (Mettler Toledo,
+  Masterflex, VSpin, BioShake, Inheco ThermoShake, Cytation 5, Synergy H1, SpectraMax M5 and 384
+  Plus, Byonoy A96 and L96), the rest through `pylabrobot.legacy` (CLARIOstar, Tecan Spark and
+  Infinite, SpectraMax Gemini EM, Hamilton heater-shaker and HEPA fan, ODTC, Opentrons, ProFlex and
+  ATC thermocyclers, and the generic legacy front ends). Each simulated.
+- Plate readers read plates where they sit on a liquid handler's worktable, and in simulation read
+  what was pipetted into them.
+- The bridge reads a dataclass of dataclasses (a thermocycler `Protocol`'s stages and steps) and a
+  fixed tuple of numbers (an RGB colour); a step's result never holds NaN (JSON has none).
+- An `opentrons` extra, for the Opentrons Thermocycler through its OT-2.
+- [docs/system-libraries.md](docs/system-libraries.md): what a device needs outside Python
+  (libftdi, hidapi, a Windows USB driver), which no extra can install.
 
 ### What changed in 1.0.0b2 (still on PyLabRobot 1.0.0b1)
 

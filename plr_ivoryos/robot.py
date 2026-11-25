@@ -15,8 +15,10 @@ it gets labware choices and well pickers while the worktable is drawn once.
 import asyncio
 import copy
 import inspect
+import itertools
 import os
 import re
+import weakref
 from typing import Annotated, Any, Callable, Dict, List, Optional, Union
 
 from pylabrobot.resources import (Carrier, Container, Deck, ItemizedResource, Plate, ResourceHolder, TipRack, Trash,
@@ -61,6 +63,16 @@ def _box(resource) -> Dict[str, float]:
 
 # Default worktable files handed out in this process, so two robots do not share one.
 _defaults_taken: set = set()
+
+# The robots made in this process, so an instrument that works on a robot's labware (a plate reader
+# reading a plate where it sits, device.py) can find the robot whose worktable it shares.
+_live: "weakref.WeakSet" = weakref.WeakSet()
+_made = itertools.count()
+
+
+def live_robots() -> List["WorktableRobot"]:
+    """The robots made in this process that still exist, oldest first."""
+    return sorted(_live, key=lambda robot: robot._made)
 
 
 def worktable_path(path: Optional[str]) -> str:
@@ -161,6 +173,8 @@ class WorktableRobot:
         self._kept: Optional[str] = None
         self._parts: Dict[str, Any] = {}
         self.deck = worktable.build_deck(self._config)
+        self._made = next(_made)
+        _live.add(self)
 
     def _after_init(self) -> None:
         """What a subclass calls once it has its equipment: liquids, and the file and PyLabRobot's copy."""
