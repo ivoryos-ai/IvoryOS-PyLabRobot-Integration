@@ -76,6 +76,9 @@
     .def { display: block; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 3px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; cursor: grab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; touch-action: none; }
     .def:hover { background: var(--soft); }
     .def.on { background: var(--accent-soft); color: var(--accent-fg); border-color: var(--accent); }
+    #peek { position: fixed; z-index: 10; pointer-events: none; padding: 4px 8px; border-radius: 6px; background: var(--ink); color: var(--bg); font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; transform: translate(12px, 14px); }
+    .fitted { border: none; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+    .fitted:hover { color: var(--accent-fg); }
     #ghost { position: fixed; z-index: 10; pointer-events: none; padding: 3px 8px; border-radius: 6px; background: var(--accent); color: var(--on-accent); font: 600 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.18); transform: translate(10px, 10px); }
     .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 6px 2px 10px; font-size: 12px; color: var(--muted); }
     .chip { display: inline-flex; align-items: center; gap: 5px; }
@@ -106,10 +109,15 @@
     .fixture.movable { cursor: grab; }
     .fixture-name { fill: var(--muted); font-size: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
     .trash { fill: var(--fixture); stroke: var(--ware-line); stroke-width: .6; stroke-dasharray: 1.5 1.5; }
-    .ware { fill: var(--ware); stroke: var(--ware-line); stroke-width: .8; cursor: pointer; }
-    .editing .ware.movable { cursor: grab; }
+    .ware { fill: var(--ware); stroke: var(--ware-line); stroke-width: .8; }
+    /* A labware is one thing to the pointer: clicked anywhere to look closer, grabbed anywhere to move. */
+    .labware { cursor: zoom-in; }
+    .labware:not(.open):hover .ware { stroke: var(--accent); }
+    .editing .labware.movable { cursor: grab; }
+    .labware.open { cursor: default; }
+    body.dragging, body.dragging * { cursor: grabbing !important; }
     .ware.sel { stroke: var(--accent); stroke-width: 1.6; }
-    .ware.lifted, .fixture.lifted { opacity: .35; }
+    .labware.lifted, .fixture.lifted { opacity: .35; }
     .ware-name { fill: var(--ink); font-size: 5px; font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
     .ware-site { fill: var(--muted); font-size: 4.6px; text-anchor: end; pointer-events: none; }
     .remove { cursor: pointer; }
@@ -143,6 +151,7 @@
   <table id="list"></table>
   <datalist id="liquid-names"></datalist>
   <div id="ghost" hidden></div>
+  <div id="peek" hidden></div>
   <!-- Outside what is redrawn: the file dialog answers to this very element. -->
   <input type="file" id="importfile" accept=".json,application/json" hidden>
 
@@ -228,7 +237,7 @@
       $("tabs").innerHTML = names.length > 1
         ? names.map(n => `<button class="tab ${n === current ? "on" : ""}" data-tab="${esc(n)}">${esc(n)}</button>`).join("") : "";
       const offered = catalogs[current] || {};
-      const canEdit = (offered.labware || []).length > 0 || (offered.decks || []).length > 0 || offered.importable;
+      const canEdit = (offered.labware || []).length > 0 || (offered.decks || []).length > 0 || offered.importable || !!offered.equipment;
       $("edit").hidden = !canEdit;
       $("edit").classList.toggle("on", editing);
       $("edit").textContent = editing ? "Done" : "Edit layout";
@@ -241,13 +250,11 @@
       }
       const layout = layouts[current], state = (states[current] || {}).labware || {};
       $("title").textContent = current;
-      // What is fitted (a pipette per mount, a 96-head, a gripper, an iSWAP, ...): each one is an
-      // instrument of its own. A pipette is named; a part that is simply there is listed.
-      const fitted = layout.deck.equipment || {}, fittedLabels = fitted.labels || {};
-      const mounted = Object.keys(fitted).filter(k => k !== "labels" && k !== "trash" && fitted[k])
-        .map(k => fitted[k] === true ? k.replace(/_/g, " ") : `${k}: ${fittedLabels[k] || fitted[k]}`);
-      $("kind").textContent = (layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : "")
-        + (mounted.length ? " · " + mounted.join(", ") : "");
+      // What is fitted (a pipette per mount, a 96-head, a gripper, an iSWAP, ...), said by the robot.
+      // Clicked, it opens where it is changed (or, on a robot whose parts are built in, shown).
+      const fitted = (layout.deck.equipment_summary || []).join(", ");
+      $("kind").innerHTML = esc((layout.deck.label || layout.deck.kind) + (layout.deck.simulated ? " · simulated" : ""))
+        + (fitted ? " · " + (offered.equipment ? `<button class="fitted" id="equipment" title="What is fitted to the robot">${esc(fitted)}</button>` : esc(fitted)) : "");
       $("layoutline").innerHTML = layoutLine(layout.deck.layout);
       if (zoomed && !layout.labware[zoomed]) zoomed = null;
 
@@ -285,10 +292,15 @@
         if (!s.holds && s.w > 40) svg += `<text class="site-label" x="${s.x + s.w / 2}" y="${Y(s.y, s.h) + s.h / 2}">${esc(String(s.label).replace(/^.*-/, ""))}</text>`;
       }
       const choosing = editing && focus && holdsLiquid(focus);
+      const after = [];  // drawn over every labware: the × that takes one off
       for (const [name, ware] of Object.entries(layout.labware)) {
         const held = state[name] || {}, tips = ware.category === "tip_rack";
-        const wy = Y(ware.y, ware.h);
-        svg += `<rect class="ware ${zoomed === name ? "sel" : ""} ${ware.editable ? "movable" : ""}" data-ware="${esc(name)}" x="${ware.x}" y="${wy}" width="${ware.w}" height="${ware.h}" rx="2.5"/>`;
+        const wy = Y(ware.y, ware.h), open = zoomed === name;
+        // Seen whole, a labware is one thing (its name and what it holds); looked at closely, each
+        // well or tip says what it holds as the pointer passes over it.
+        svg += `<g class="labware ${open ? "open" : ""} ${editing && ware.editable && !focus ? "movable" : ""}" data-ware="${esc(name)}">`
+          + (open ? "" : `<title>${esc(name)} · ${esc(summaryOf(ware, held))}</title>`);
+        svg += `<rect class="ware ${open ? "sel" : ""}" x="${ware.x}" y="${wy}" width="${ware.w}" height="${ware.h}" rx="2.5"/>`;
         ware.grid.forEach((row, r) => row.forEach((id, c) => {
           const spot = ware.spots[id];
           if (!spot) return;
@@ -299,23 +311,24 @@
           const pick = choosing && zoomed === name ? `data-well="${esc(id)}" data-r="${r}" data-c="${c}"` : "";
           if (tips) {
             const rr = Math.min(3.1, ware.w / (ware.grid[0].length * 2.9));
-            svg += `<circle class="tip ${here.tip === false ? "used" : ""}" cx="${cx}" cy="${cy}" r="${rr}"><title>${esc(name)}[${esc(id)}] · ${here.tip === false ? "used" : "tip"}</title></circle>`;
+            const info = open ? `data-info="${esc(name)}[${esc(id)}] · ${here.tip === false ? "no tip" : "tip"}"` : "";
+            svg += `<circle class="tip ${here.tip === false ? "used" : ""}" ${info} cx="${cx}" cy="${cy}" r="${rr}"/>`;
             if (active) svg += `<circle class="hit" cx="${cx}" cy="${cy}" r="${rr + 1}"/>`;
             return;
           }
           const volume = here.volume_ul || 0, full = ware.max_volume_ul ? Math.min(1, volume / ware.max_volume_ul) : (volume ? 1 : 0);
           const parts = Object.entries(here.liquids || {}).map(([l, v]) => `${l} ${fmt(v)}`).join(", ");
-          const label = `<title>${esc(name)}[${esc(id)}] · ${volume ? `${fmt(volume)} µL${parts ? ` (${esc(parts)})` : ""}` : "empty"}</title>`;
+          const info = open ? `data-info="${esc(name)}[${esc(id)}] · ${volume ? `${fmt(volume)} µL${parts ? ` (${esc(parts)})` : ""}` : "empty"}"` : "";
           const chosen = choosing && zoomed === name && picked.has(id);
           if (round) {
             const rr = Math.min(w, h) / 2;
-            svg += `<circle class="well" ${pick} cx="${cx}" cy="${cy}" r="${rr}">${label}</circle>`;
+            svg += `<circle class="well" ${pick} ${info} cx="${cx}" cy="${cy}" r="${rr}"/>`;
             if (volume) svg += `<circle cx="${cx}" cy="${cy}" r="${rr * (0.4 + 0.55 * Math.sqrt(full))}" fill="${mixed(here.liquids)}" pointer-events="none"/>`;
             if (active) svg += `<circle class="hit" cx="${cx}" cy="${cy}" r="${rr + 0.9}"/>`;
             if (chosen) svg += `<circle class="picked" cx="${cx}" cy="${cy}" r="${rr + 0.6}"/>`;
           } else {
             const x = ware.x + dx, y = top - (ware.y + dy + h);
-            svg += `<rect class="well" ${pick} x="${x}" y="${y}" width="${w}" height="${h}" rx="1.2">${label}</rect>`;
+            svg += `<rect class="well" ${pick} ${info} x="${x}" y="${y}" width="${w}" height="${h}" rx="1.2"/>`;
             // Seen from above a trough has no level to show, so how full it is is how much of it is tinted.
             if (volume) svg += `<rect x="${x + 0.6}" y="${y + 0.6 + (h - 1.2) * (1 - full)}" width="${w - 1.2}" height="${(h - 1.2) * full}" rx="0.9" fill="${mixed(here.liquids)}" pointer-events="none"/>`;
             if (active) svg += `<rect class="hit" x="${x - 0.8}" y="${y - 0.8}" width="${w + 1.6}" height="${h + 1.6}" rx="1.6"/>`;
@@ -324,8 +337,10 @@
         }));
         svg += `<text class="ware-name" x="${ware.x + 3}" y="${wy + 5.6}">${esc(name)}</text>`;
         if (ware.site && !(editing && ware.editable)) svg += `<text class="ware-site" x="${ware.x + ware.w - 3}" y="${wy + 5.6}">${esc(String(ware.site).replace(/^.*-/, "#"))}</text>`;
-        if (editing && ware.editable && !focus) svg += removeMark(name, ware.x + ware.w - 4.5, wy + 4.5);
+        svg += `</g>`;
+        if (editing && ware.editable && !focus) after.push(removeMark(name, ware.x + ware.w - 4.5, wy + 4.5));
       }
+      svg += after.join("");
       // Where a dragged carrier would go: drawn on top, moved as the pointer moves.
       svg += `<g id="railmark" visibility="hidden"><rect class="preview" id="railbox" rx="3"/><line class="rail-mark" id="railline"/><text class="rail-label" id="raillabel"/></g>`;
       $("stage").innerHTML = `<svg class="${editing ? "editing" : ""} ${choosing ? "picking" : ""}" viewBox="${view.join(" ")}" role="img" aria-label="${esc(current)} worktable">${svg}</svg>`
@@ -338,14 +353,7 @@
       $("liquid-names").innerHTML = [...known].sort().map(l => `<option value="${esc(l)}">`).join("");
 
       $("list").innerHTML = Object.entries(layout.labware).map(([name, ware]) => {
-        const held = state[name] || {}, spots = Object.keys(ware.spots).length;
-        let what;
-        if (ware.category === "tip_rack") what = `${Object.values(held).filter(s => s.tip !== false).length} of ${spots} tips left`;
-        else {
-          const filled = Object.values(held).filter(s => s.volume_ul > 0);
-          const total = filled.reduce((sum, s) => sum + s.volume_ul, 0);
-          what = filled.length ? `${filled.length} of ${spots} ${spots === 1 ? "filled" : "wells hold liquid"} · ${total >= 1000 ? fmt(total / 1000) + " mL" : fmt(total) + " µL"}` : "empty";
-        }
+        const what = summaryOf(ware, state[name] || {});
         const named = editing && ware.editable
           ? `<input type="text" data-rename="${esc(name)}" value="${esc(name)}" aria-label="Name of ${esc(name)}" spellcheck="false">`
           : esc(name);
@@ -353,6 +361,15 @@
       }).join("");
       renderFill();
       renderEditor();
+    }
+
+    // What a labware holds, in a few words: tips left, or wells holding liquid and how much.
+    function summaryOf(ware, held) {
+      const spots = Object.keys(ware.spots).length;
+      if (ware.category === "tip_rack") return `${Object.values(held).filter(s => s.tip !== false).length} of ${spots} tips left`;
+      const filled = Object.values(held).filter(s => s.volume_ul > 0);
+      const total = filled.reduce((sum, s) => sum + s.volume_ul, 0);
+      return filled.length ? `${filled.length} of ${spots} ${spots === 1 ? "filled" : "wells hold liquid"} · ${total >= 1000 ? fmt(total / 1000) + " mL" : fmt(total) + " µL"}` : "empty";
     }
 
     // Which saved layout this worktable is, and whether it still is that layout. Liquids are said
@@ -432,7 +449,7 @@
       if (named && now.saved) items.push(`<button id="saveas">Save as…</button>`);
       if (offered.importable) items.push(`<button id="import">Import a layout…</button>`);
       if (named) items.push(`<a href="api/export?worktable=${encodeURIComponent(current)}" download>Download</a>`);
-      if (offered.equipment || (offered.decks || []).length) items.push(`<hr><button id="mounted">${offered.equipment ? "Pipettes and gripper…" : "Robot…"}</button>`);
+      if (offered.equipment || (offered.decks || []).length) items.push(`<hr><button id="mounted">${offered.equipment ? "Equipment…" : "Robot…"}</button>`);
       if (named && now.saved) items.push(`<hr><button class="danger" id="dellayout">Delete saved layout</button>`);
       html += `<span class="spacer"></span>`;
       if (items.length) html += `<span class="menu"><button class="plain icon ${menu ? "on" : ""}" id="more" aria-label="More" aria-expanded="${menu}">⋯</button>${menu ? `<div class="items">${items.join("")}</div>` : ""}</span>`;
@@ -463,15 +480,16 @@
       if ((offered.decks || []).length) {
         html += `<div class="row"><label for="deck">${deck.simulated ? "Robot" : "Model"}</label><select id="deck">${offered.decks.map(d => `<option value="${esc(d.kind)}" ${d.kind === offered.deck ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></div>`;
       }
-      if (offered.equipment) {
-        const eq = offered.equipment, now = eq.current || {};
-        const choose = (key, pipettes) => `<select id="eq-${key}" data-equipment="${key}"><option value="none">nothing</option>${
-          pipettes.map(p => `<option value="${esc(p.name)}" ${p.name === now[key] ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select>`;
-        const mounts = eq.pipettes.filter(p => p.channels !== 96), heads = eq.pipettes.filter(p => p.channels === 96);
-        html += `<div class="row"><label for="eq-left">Left</label>${choose("left", mounts)}<label for="eq-right">Right</label>${choose("right", mounts)}</div>
-          <div class="row"><label for="eq-head96">96-channel</label>${choose("head96", heads)}
-          <label><input type="checkbox" id="eq-gripper" data-equipment="gripper" ${now.gripper ? "checked" : ""}> Gripper</label>
-          <label for="eq-trash">Trash bin</label><select id="eq-trash" data-equipment="trash">${eq.trash.map(slot => `<option ${slot === now.trash ? "selected" : ""}>${esc(slot)}</option>`).join("")}<option value="none" ${now.trash ? "" : "selected"}>none</option></select></div>`;
+      // What is fitted, as the robot describes it: a choice (a pipette on a mount, how many channels)
+      // or a toggle (a gripper). A robot whose parts are built in shows them, and says so.
+      const eq = offered.equipment;
+      if (eq) {
+        const off = eq.fixed ? "disabled" : "";
+        html += `<div class="row">` + eq.fields.map(f => f.kind === "toggle"
+          ? `<label><input type="checkbox" id="eq-${esc(f.key)}" data-equipment="${esc(f.key)}" ${f.value ? "checked" : ""} ${off}> ${esc(f.label)}</label>`
+          : `<label for="eq-${esc(f.key)}">${esc(f.label)}</label><select id="eq-${esc(f.key)}" data-equipment="${esc(f.key)}" ${off}>${
+              f.options.map(o => `<option value="${esc(o.value)}" ${o.value === f.value ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`).join("") + `</div>`;
+        if (eq.fixed) html += `<p>${esc(eq.fixed)}</p>`;
       }
       return html;
     }
@@ -479,10 +497,10 @@
     // Everything there is to read, in one place, shown only when asked for.
     function helpText(offered, deck) {
       const rails = (deck.rails || []).length;
-      let html = `<div class="help"><p>${rails ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware from the list onto an empty slot."} Drag what is there to move it, × takes it off, and its name is changed in the table. Click a plate or reservoir to fill its wells. Nothing on the robot moves.</p>`;
+      let html = `<div class="help"><p>${rails ? "Drag a carrier onto the rails, and labware onto a carrier position." : "Drag labware from the list onto an empty slot."} Drag what is there to move it, × takes it off, and its name is changed in the table. Click a plate or reservoir to look closer and fill its wells. Nothing on the robot moves.</p>`;
       if (offered.layouts) html += `<p><b>Layouts.</b> Save the worktable under a name, switch between saved ones, and Revert to go back to one as it was saved. They are files in <code>${esc(offered.layouts.folder || "")}</code>. Download gives one as a file; Import takes a worktable file, or PyLabRobot's own (<code>deck.save</code>).</p>`;
       else if (offered.importable) html += `<p>Import takes a worktable file, or PyLabRobot's own (<code>deck.save</code>).</p>`;
-      html += `<p><b>Restart.</b> Steps offer new, removed or renamed labware${offered.equipment ? ", and a change to what is mounted," : ""} once the deck restarts. Moving labware and filling wells need none.${offered.equipment ? ` Each pipette and the gripper is an instrument of its own (<code>${esc(current)}_left</code>, <code>${esc(current)}_gripper</code>, …).` : ""}</p>`;
+      html += `<p><b>Restart.</b> Steps offer new, removed or renamed labware${offered.equipment ? ", and a change to what is mounted," : ""} once the deck restarts. Moving labware and filling wells need none.${offered.equipment ? ` Each thing fitted is an instrument of its own, named after it (<code>${esc(current)}_…</code>).` : ""}</p>`;
       const files = deck.pylabrobot_files || {};
       if (files.layout) {
         const link = (part, text) => `<a href="api/pylabrobot?worktable=${encodeURIComponent(current)}&part=${part}" download>${text}</a>`;
@@ -588,14 +606,29 @@
       drag = { ...what, x: evt.clientX, y0: evt.clientY, started: false, target: null };
     }
 
+    // Looking closely at a labware, each well or tip says what it holds as the pointer passes over it.
+    function peekAt(evt) {
+      const el = zoomed && document.elementFromPoint(evt.clientX, evt.clientY);
+      const spot = el && el.closest && el.closest("#stage [data-info]");
+      const peek = $("peek");
+      if (!spot) { peek.hidden = true; return; }
+      peek.textContent = spot.dataset.info;
+      peek.style.left = evt.clientX + "px";
+      peek.style.top = evt.clientY + "px";
+      peek.hidden = false;
+    }
+    document.addEventListener("pointerleave", () => { $("peek").hidden = true; });
+
     addEventListener("pointermove", evt => {
-      if (picking) { pickAt(evt); return; }
-      if (!drag) return;
+      if (picking) { pickAt(evt); peekAt(evt); return; }
+      if (!drag) { peekAt(evt); return; }
       if (!drag.started) {
         if (Math.hypot(evt.clientX - drag.x, evt.clientY - drag.y0) < 5) return;
         drag.started = true;
         $("ghost").textContent = drag.label;
         $("ghost").hidden = false;
+        $("peek").hidden = true;
+        document.body.classList.add("dragging");
         if (drag.element) drag.element.classList.add("lifted");
       }
       $("ghost").style.left = evt.clientX + "px";
@@ -610,6 +643,7 @@
       const done = drag;
       drag = null;
       $("ghost").hidden = true;
+      document.body.classList.remove("dragging");
       if (done.element) done.element.classList.remove("lifted");
       showTarget(null);
       if (!done.started) { done.click && done.click(); return; }
@@ -669,7 +703,8 @@
         startDrag(evt, { name: f.name, label: f.name, carrier: true, element: carrier, width: f.w, height: f.h, y: f.y, grab: at ? at.x - f.x : 0 });
         return;
       }
-      const ware = t.closest("#stage rect[data-ware]");
+      // A labware is grabbed anywhere on it, its wells and tips included.
+      const ware = t.closest("#stage [data-ware]");
       if (ware && !zoomed) {
         const name = ware.dataset.ware, entry = layouts[current].labware[name];
         evt.preventDefault();
@@ -695,6 +730,7 @@
       if (t.id === "more") { menu = !menu; render(); return; }
       if (t.id === "help") { help = !help; render(); return; }
       if (t.id === "mounted") { mounting = !mounting; render(); return; }
+      if (t.id === "equipment") { editing = true; mounting = true; menu = false; notice = null; render(); return; }
       if (t.id === "askcancel") { ask = null; render(); return; }
       if (t.id === "savelayout") { ask = null; applyEdit({ action: "save_layout" }); return; }
       if (t.id === "saveas") { ask = { kind: "saveas", name: "" }; render(); $("layoutname").focus(); return; }
@@ -722,7 +758,7 @@
         return;
       }
       if (remove) { applyEdit({ action: "remove", name: remove.dataset.remove }); return; }
-      if (t.id === "reset") { zoomed = null; picked = new Set(); render(); return; }
+      if (t.id === "reset") { zoomed = null; picked = new Set(); $("peek").hidden = true; render(); return; }
       if (t.id === "all") { picked = new Set(Object.keys(layouts[current].labware[zoomed].spots)); render(); return; }
       if (t.id === "none") { picked = new Set(); render(); return; }
       if (t.id === "fillit" || t.id === "emptyit") {
@@ -748,9 +784,10 @@
         }
       }
       if (row && !t.closest("input") && !t.closest("button")) { zoomTo(row.dataset.ware); return; }
-      // Outside edit mode a plate is clicked to look at it (in edit mode the drag handler does that).
-      const wareEl = t.closest("#stage rect[data-ware]");
-      if (wareEl && !editing) zoomTo(wareEl.dataset.ware);
+      // Outside edit mode a labware is clicked to look at it (in edit mode the drag handler does that).
+      // Looking at one, its wells are hovered, not clicked away: "Whole worktable" or Escape goes back.
+      const wareEl = t.closest("#stage [data-ware]");
+      if (wareEl && !editing && !zoomed) zoomTo(wareEl.dataset.ware);
     });
 
     document.addEventListener("input", evt => {
@@ -797,7 +834,8 @@
       if (evt.key === "Enter" && evt.target.id === "layoutname" && !$("saveasgo").disabled) $("saveasgo").click();
       if (evt.key === "Escape" && (ask || menu)) { ask = null; menu = false; render(); }
       if (evt.key === "Enter" && (evt.target.id === "liquid" || evt.target.id === "volume") && !$("fillit").disabled) $("fillit").click();
-      if (evt.key === "Escape" && drag) { drag = null; $("ghost").hidden = true; showTarget(null); render(); }
+      if (evt.key === "Escape" && drag) { drag = null; $("ghost").hidden = true; document.body.classList.remove("dragging"); showTarget(null); render(); return; }
+      if (evt.key === "Escape" && zoomed && !ask && !menu && !/^(INPUT|SELECT)$/.test(evt.target.tagName)) { zoomed = null; picked = new Set(); $("peek").hidden = true; render(); }
     });
 
     // --- loading and following ----------------------------------------------------------------------

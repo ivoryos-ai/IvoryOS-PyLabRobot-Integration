@@ -79,7 +79,7 @@ def star():
 
 
 def test_a_simulated_star_is_its_recording_and_each_fitted_thing_an_instrument(star):
-    assert star.equipment == {"pipettes": True, "head96": True, "head384": False, "iswap": True,
+    assert star.equipment == {"channels": 8, "pipettes": True, "head96": True, "head384": False, "iswap": True,
                               "core_grippers": True, "autoload": True}
     parts = star.__ivoryos_instruments__()
     assert set(parts) == {"pipettes", "head96", "iswap", "core_grippers", "autoload"}
@@ -132,6 +132,63 @@ def test_a_star_worktable_edit_is_kept_in_the_file(star):
     assert again.__ivoryos_labware__()["deck"]["pylabrobot_error"] is None
 
 
+def test_a_simulated_star_has_the_channels_and_parts_its_file_says(star):
+    fields = {f["key"]: f for f in star.__ivoryos_labware_catalog__()["equipment"]["fields"]}
+    assert [o["value"] for o in fields["channels"]["options"]] == ["2", "4", "8"]
+    assert [o["value"] for o in fields["head"]["options"]] == ["none", "96", "384"]
+    assert star.__ivoryos_labware_edit__("equipment", channels="4", head="none", iswap=False)["restart"] is True
+    assert star.equipment == {"channels": 4, "pipettes": True, "head96": False, "head384": False, "iswap": False,
+                              "core_grippers": True, "autoload": True}
+    assert star.__ivoryos_labware__()["deck"]["equipment_summary"] == ["Channels: 4", "Autoload"]
+    pipettes = star.__ivoryos_instruments__()["pipettes"]
+    pipettes.pick_up_tips(tip_spots="tips[A1:D1]")
+    assert star.__ivoryos_labware_state__()["channels"] == [True] * 4
+    pipettes.drop_tips(destinations="tips[A1:D1]")
+    again = STAR(simulated=True, worktable=star._path)
+    try:
+        assert sorted(again.__ivoryos_instruments__()) == ["autoload", "core_grippers", "pipettes"]
+        assert again.equipment["channels"] == 4
+    finally:
+        again.stop()
+    with pytest.raises(ValueError, match="STARlet has 2, 4, 8 channels, not 16"):
+        star.__ivoryos_labware_edit__("equipment", channels="16")
+
+
+def test_a_star_frame_keeps_what_it_can_have():
+    robot = STAR(simulated=True, deck_type="STARDeck", equipment={"channels": 16, "head384": True})
+    try:
+        assert robot.equipment["channels"] == 16 and robot.equipment["head384"] and not robot.equipment["head96"]
+        robot.__ivoryos_labware_edit__("deck", deck="STARLetDeck")
+        assert robot.equipment["channels"] == 8, "a STARlet cannot have 16 channels"
+        robot.__ivoryos_labware_edit__("deck", deck="STARPlusDeck")
+        fields = {f["key"]: f for f in robot.__ivoryos_labware_catalog__()["equipment"]["fields"]}
+        assert "autoload" not in fields and [o["value"] for o in fields["head"]["options"]] == ["none", "96"]
+    finally:
+        robot.stop()
+
+
+def test_a_simulated_star_starts_with_what_it_can_have(capsys):
+    # The Hub's STAR form ticks the autoload by default; PyLabRobot has no STARplus with one to simulate.
+    robot = STAR(simulated=True, deck_type="STARPlusDeck", equipment={"head96": True, "iswap": True, "autoload": True})
+    try:
+        assert robot.equipment["autoload"] is False and robot.equipment["iswap"] is True
+        assert "cannot have all that its equipment says (autoload)" in capsys.readouterr().out
+        with pytest.raises(ValueError, match="no autoload to simulate"):
+            robot.__ivoryos_labware_edit__("equipment", autoload=True)
+    finally:
+        robot.stop()
+
+
+def test_a_real_stars_equipment_is_shown_not_changed(data_folder):
+    robot = STAR(equipment={"channels": 8, "head96": True, "iswap": True, "autoload": False})
+    catalog = robot.__ivoryos_labware_catalog__()["equipment"]
+    assert catalog["fixed"] and {f["key"] for f in catalog["fields"]} == {"channels", "head", "iswap", "autoload"}
+    with pytest.raises(ValueError, match="built into it"):
+        robot.__ivoryos_labware_edit__("equipment", channels="4")
+    with pytest.raises(ValueError, match="0 to 16 channels"):
+        star_module.check_equipment({"channels": 2.5})
+
+
 # --- Hamilton Prep (PyLabRobot's simulator) -----------------------------------------------------------
 
 def test_a_simulated_prep_runs_its_channels_and_head():
@@ -151,6 +208,17 @@ def test_a_simulated_prep_runs_its_channels_and_head():
     finally:
         prep.stop()
     assert "drop_tips" not in prep_module.SKIPPED["PrepPipettes"]
+
+
+def test_a_preps_equipment_is_shown_not_changed():
+    prep = Prep(simulated=True)
+    try:
+        catalog = prep.__ivoryos_labware_catalog__()["equipment"]
+        assert catalog["fixed"] and {f["key"]: f["value"] for f in catalog["fields"]}["head8"] is True
+        with pytest.raises(ValueError, match="no equipment to change"):
+            prep.__ivoryos_labware_edit__("equipment", head8=False)
+    finally:
+        prep.stop()
 
 
 def test_a_real_prep_needs_a_host():
@@ -179,6 +247,22 @@ def test_a_simulated_ot2_runs_both_mounts():
         assert ot2.tips_left("tips") == 87
         sent = {c["commandType"] for c in ot2._plr.io.log}
         assert {"loadPipette", "pickUpTip", "aspirateInPlace", "dispenseInPlace"} <= sent
+    finally:
+        ot2.stop()
+
+
+def test_ot2_mounts_are_changed_from_the_view():
+    ot2 = OT2(simulated=True)
+    try:
+        fields = {f["key"]: f for f in ot2.__ivoryos_labware_catalog__()["equipment"]["fields"]}
+        assert list(fields) == ["left", "right"] and fields["left"]["value"] == "p300_multi_gen2"
+        assert ot2.__ivoryos_labware_edit__("equipment", left="none", right="p20_single_gen2")["restart"] is True
+        assert ot2.equipment == {"right": "p20_single_gen2"}
+        assert ot2.__ivoryos_labware__()["deck"]["equipment_summary"] == ["Right: GEN2 Single-Channel 20 µL"]
+        with pytest.raises(ValueError, match="needs a pipette"):
+            ot2.__ivoryos_labware_edit__("equipment", right="none")
+        again = OT2(simulated=True, worktable=ot2._path)
+        assert list(again.__ivoryos_instruments__()) == ["right"]
     finally:
         ot2.stop()
 

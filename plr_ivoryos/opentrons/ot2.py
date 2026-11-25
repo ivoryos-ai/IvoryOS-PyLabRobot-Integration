@@ -22,7 +22,7 @@ from pylabrobot.opentrons.ot2 import OT2 as PLROT2, OT2_8ChannelPipette, OT2Sing
 from plr_ivoryos import bridge
 from plr_ivoryos.async_bridge import run_async
 from plr_ivoryos.opentrons.simulator import OT2_PIPETTES, SimulatedOT2Server
-from plr_ivoryos.robot import WorktableRobot, part_class
+from plr_ivoryos.robot import WorktableRobot, choice, part_class
 
 MOUNTS = ("left", "right")
 PIPETTE_CLASSES = {1: OT2SingleChannelPipette, 8: OT2_8ChannelPipette}
@@ -175,6 +175,22 @@ class OT2(WorktableRobot):
         equipment = self.equipment
         return {"equipment": {**equipment, "labels": {mount: OT2_PIPETTES[name]["label"]
                                                       for mount, name in equipment.items()}}}
+
+    def _equipment_fields(self) -> List[dict]:
+        now, pipettes = self.equipment, [(name, spec["label"]) for name, spec in OT2_PIPETTES.items()]
+        return [choice(mount, mount.capitalize(), now.get(mount), pipettes, none="nothing") for mount in MOUNTS]
+
+    def _edit_equipment(self, change: dict) -> str:
+        """The pipette on each mount (left, right: a pipette name, or none). Takes effect for
+        steps when the deck restarts, since each mounted pipette is an instrument of its own."""
+        merged = self.equipment
+        for mount in MOUNTS:
+            if mount in change:
+                merged[mount] = change[mount]
+        self._config["equipment"] = check_equipment(merged)
+        if self._simulated:
+            self._plr = self._make_plr()  # a simulated robot with what is mounted now
+        return "equipment"
 
 
 _HERE = __name__
