@@ -249,10 +249,12 @@ DEVICES = [
            "A Byonoy Luminescence 96 Automate through PyLabRobot 1.0 (ByonoyLuminescence96), over USB. " + READS + OURS +
            "for the real one, untick simulated. "),
     device(420, "BioShake", "plr_ivoryos.qinstruments", "bioshake", "serial",
-           [arg("port", "str"), arg("model", "str", "BioShake3000T")],
-           "A QInstruments BioShake (model: BioShake3000, BioShake3000T, BioShake3000Elm, BioShakeD30TElm, BioShakeQ1, "
-           "Heatplate, ColdPlate, ...) through PyLabRobot 1.0 (qinstruments.BioShake): shake, set_temperature, "
-           "lock_plate, ... " + OURS + "for the real one, untick simulated and give its serial port. "),
+           [arg("port", "str"), arg("model", "str", "BioShakeQ1")],
+           "A QInstruments BioShake through PyLabRobot 1.0 (qinstruments.BioShake): shake, set_temperature, lock_plate, "
+           "... model is one of the four PyLabRobot 1.0.0b1 can make: BioShakeQ1 (the default: shakes, locks, heats "
+           "and cools), BioShake3000 (shakes), BioShake3000Elm or BioShake3000ElmDWP (shake and lock); PyLabRobot "
+           "names more but has no resource definition for them yet. " + OURS + "for the real one, untick simulated "
+           "and give its serial port. "),
     device(188, "InhecoThermoShake", "plr_ivoryos.inheco", "thermoshake", "hid",
            [arg("index", "int", 1), arg("serial_number", "str"), arg("model", "str", "thermoshake")],
            "An Inheco ThermoShake (model: thermoshake, thermoshake_ac or thermoshake_rm) on a TEC control box, through "
